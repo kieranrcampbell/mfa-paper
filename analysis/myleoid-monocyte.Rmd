@@ -12,13 +12,39 @@ output:
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, cache = TRUE, fig.width = 7, fig.height = 4,
                       warning = FALSE, message = FALSE)
+
+library(scater)
+library(readr)
+library(dplyr)
 ```
 
 # Load data
 
+```{r load-data}
+raw <- read_csv("../data/wishbone_myleoid_monocyte.txt.zip")
+```
+
+```{r convert-to-sceset}
+gex <- select(raw, -tSNE1, -tSNE2, -Trajectory, -Branch)
+pdata <- select(raw, tSNE1, tSNE2, Trajectory, Branch)
+
+sample_names <- paste0("cell_", seq_len(nrow(gex)))
+gex <- t(as.matrix(gex))
+colnames(gex) <- sample_names
+
+pdata <- as.data.frame(pdata)
+rownames(pdata) <- sample_names
+
+sce <- newSCESet(exprsData = gex, phenoData = AnnotatedDataFrame(pdata))
+```
 
 
 # Plots
+
+```{r pca-plots}
+plotPCA(sce, colour_by = "Trajectory", ncomponents = 3)
+plotPCA(sce, colour_by = "Branch", ncomponents = 3) + scale_fill_brewer(palette = "Set1")
+```
 
 
 # Inference

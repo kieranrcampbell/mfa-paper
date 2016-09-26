@@ -9,16 +9,89 @@ output:
     toc: yes
 ---
 
-```{r setup, include=FALSE}
+```{r setup, include=FALSE, cache = FALSE}
 knitr::opts_chunk$set(echo = TRUE, cache = TRUE, fig.width = 7, fig.height = 4,
                       warning = FALSE, message = FALSE)
+
+library(scater)
+library(readr)
+library(dplyr)
+
+library(devtools)
+
+load_all("~/oxford/mfa/mfa")
+
 ```
 
 # Load data
 
+```{r load-data}
+raw <- read_csv("../data/wishbone_myleoid_erythrocyte_monocyte.txt.zip")
+```
+
+```{r convert-to-sceset}
+gex <- select(raw, -tSNE1, -tSNE2, -Trajectory, -Branch)
+pdata <- select(raw, tSNE1, tSNE2, Trajectory, Branch)
+
+sample_names <- paste0("cell_", seq_len(nrow(gex)))
+gex <- t(as.matrix(gex))
+colnames(gex) <- sample_names
+
+pdata <- as.data.frame(pdata)
+rownames(pdata) <- sample_names
+
+sce <- newSCESet(exprsData = gex, phenoData = AnnotatedDataFrame(pdata))
+```
 
 
 # Plots
 
+```{r pca-plots}
+plotPCA(sce, colour_by = "Trajectory", ncomponents = 3)
+plotPCA(sce, colour_by = "Branch") + scale_fill_brewer(palette = "Set1")
+```
 
-# Inference
+
+# Analysis on a subset
+
+```{r subset}
+set.seed(123L)
+sce_subset <- sce[, sample(ncol(sce), 4000)]
+
+plotPCA(sce_subset, colour_by = "Branch")
+plotPCA(sce_subset, colour_by = "Trajectory")
+```
+
+```{r mfa}
+y_scaled <- scale(t(exprs(sce_subset)))
+
+m <- mfa(y_scaled, iter = 40000, thin = 20, pc_initialise = 2)
+
+print( m )
+```
+
+MCMC diagnostics:
+
+```{r mcmc-diagnostics}
+plot_mfa_trace(m)
+plot_mfa_autocorr(m)
+```
+
+```{r mfa-summary}
+mfa_summary <- summary(m)
+print(mfa_summary)
+```
+
+add this to SCESet:
+
+```{r add-to-sceset}
+pData(sce_subset) <- cbind(pData(sce_subset), mfa_summary)
+```
+
+and plots:
+
+```{r plots}
+plotPCA(sce_subset, colour_by = "branch")
+plotPCA(sce_subset, colour_by = "pseudotime")
+```
+
