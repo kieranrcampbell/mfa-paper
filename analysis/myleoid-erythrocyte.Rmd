@@ -14,12 +14,11 @@ knitr::opts_chunk$set(echo = TRUE, cache = TRUE, fig.width = 7, fig.height = 4,
                       warning = FALSE, message = FALSE)
 
 library(scater)
-library(readr)
-library(dplyr)
+library(tidyverse)
 
-library(devtools)
-
-load_all("~/oxford/mfa/mfa")
+# library(devtools)
+# 
+# load_all("~/oxford/mfa/mfa")
 
 ```
 
@@ -62,10 +61,17 @@ plotPCA(sce_subset, colour_by = "Branch")
 plotPCA(sce_subset, colour_by = "Trajectory")
 ```
 
-```{r mfa}
-y_scaled <- scale(t(exprs(sce_subset)))
+Scale the data and have a quick look at the distribution
 
-m <- mfa(y_scaled, iter = 40000, thin = 20, pc_initialise = 2)
+```{r mfa-setup}
+y_scaled <- scale(t(exprs(sce_subset)))
+y_scaled %>% as_data_frame() %>% gather(gene, expression) %>% 
+  ggplot(aes(x = expression, color = gene)) + geom_density()
+```
+
+```{r mfa}
+y <- t(exprs(sce_subset))
+m <- mfa(y_scaled, iter = 40000, thin = 20, pc_initialise = 2, b = 2, collapse = FALSE)
 
 print( m )
 ```
@@ -85,13 +91,14 @@ print(mfa_summary)
 add this to SCESet:
 
 ```{r add-to-sceset}
+sce_subset$pseudotime <- sce_subset$branch <- sce_subset$branch_certainty <- NULL
 pData(sce_subset) <- cbind(pData(sce_subset), mfa_summary)
 ```
 
 and plots:
 
 ```{r plots}
-plotPCA(sce_subset, colour_by = "branch")
-plotPCA(sce_subset, colour_by = "pseudotime")
+cowplot::plot_grid(plotPCA(sce_subset, colour_by = "branch"),
+          plotPCA(sce_subset, colour_by = "pseudotime"))
 ```
 
