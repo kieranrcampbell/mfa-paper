@@ -1,0 +1,24 @@
+---
+title: "Myleoid Erthrocyte Analysis"
+author: "Kieran Campbell"
+date: "26 September 2016"
+output:
+  html_document:
+    highlight: tango
+    number_sections: yes
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE, fig.width = 7, fig.height = 4,
+                      warning = FALSE, message = FALSE)
+```
+
+# Load data
+
+
+
+# Plots
+
+
+# Inference
