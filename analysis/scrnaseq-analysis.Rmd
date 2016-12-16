@@ -12,13 +12,150 @@ output:
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, cache = TRUE, fig.width = 7, fig.height = 4,
                       warning = FALSE, message = FALSE)
+
+library(scater)
+library(tidyverse)
+library(viridis)
+
+devtools::load_all("~/oxford/mfa/mfa")
 ```
 
 # Load data
 
+Create an `SCESet`:
 
+```{r make-sceset}
+raw <- read_csv("../data/wishbone_mouse_marrow_scrnaseq.csv.gz")
+tpm <- as.matrix(raw[,-1])
+
+nc <- ncol(tpm)
+wishbone_data <- data.frame(tpm[, (nc - 3):nc])
+tpm <- tpm[, 1:(nc - 4)]
+
+cellnames <- raw[[1]]
+pd <- mutate(wishbone_data, sample = cellnames)
+
+rownames(pd) <- cellnames
+tpm <- t(tpm)
+colnames(tpm) <- cellnames
+
+sce <- newSCESet(exprsData = tpm, phenoData = new("AnnotatedDataFrame", pd))
+#is_exprs(sce) <- exprs(sce) > 0
+#sce <- calculateQCMetrics(sce)
+```
+
+Let's subset to something reasonable:
+
+```{r subset}
+sc <- sce[rowMeans(exprs(sce) > 0) > 0.2, ] # expressed in at least 20% of cells
+```
 
 # Plots
 
+For paper?
+
+```{r plot-pca}
+plotPCA(sc, colour_by = "Branch") + 
+  scale_fill_brewer(palette = "Set1", name = "Wishbone\nBranch")
+```
+
 
 # Inference
+
+```{r gene-selection}
+means <- rowMeans(exprs(sc))
+vars <- matrixStats::rowVars(exprs(sc))
+to_use <- vars > 5
+```
+
+```{r create-gex-matrix}
+set.seed(123L)
+# to_sample <- seq_len(ncol(sce)) 
+to_sample <- sample(seq_len(ncol(sce)), 500)
+s <- sc[to_use, to_sample]
+X <- t(exprs(s))
+```
+
+```{r inference}
+set.seed(123L)
+mrna <- mfa(scale(X), iter = 100000, thin = 20, pc_initialise = 2, 
+         b = 2, tau_eta = 1, tau_theta = 1, prop_collapse = 0,
+         alpha = 1, beta = 1, tau_c = 0.1, alpha_chi = 1000, beta_chi = 1)
+```
+
+MCMC diagnostics:
+
+```{r mcmc-diagnostics}
+plot_mfa_trace(mrna)
+plot_mfa_autocorr(mrna)
+```
+
+```{r mfa-summary}
+mfa_summary <- summary(mrna)
+print(mfa_summary)
+```
+
+add this to SCESet:
+
+```{r add-to-sceset}
+for(col in names(mfa_summary)) pData(s)[[col]] <- NULL
+pData(s) <- cbind(pData(s), mfa_summary)
+```
+
+and plots:
+
+```{r plots}
+ggplot(pData(s), aes(x = tSNE1, y = tSNE2, color = pseudotime)) + geom_point() +
+  scale_color_viridis()
+
+ggplot(pData(s), aes(x = tSNE1, y = tSNE2, color = factor(branch), 
+                     size = -branch_certainty)) + 
+  geom_point() +
+  scale_color_brewer(palette = "Set1")
+
+s$two_f_gamma <- (s$branch == 1) * s$branch_certainty +
+  (s$branch == 2) * (1 - s$branch_certainty)
+
+ggplot(pData(s), aes(x = tSNE1, y = tSNE2, color = two_f_gamma)) + 
+  geom_point() +
+  scale_color_viridis()
+
+
+plt1 <- plotPhenoData(s, aes_string(x = 'tSNE1', y = "tSNE2", color = "pseudotime"))
+plt2 <- plotPhenoData(s, aes_string(x = 'tSNE1', y = "tSNE2", 
+                            color = "branch"))
+
+cowplot::plot_grid(plt1, plt2, nrow = 2)
+
+  ```
+
+## Shuffling of trunk
+
+```{r shuffle}
+
+sce_shuffle <- sc
+
+exprs_branch_1 <- exprs(sce_shuffle[, sce_shuffle$Branch == 1])
+
+exprs_branch_1_shuffled <- apply(exprs_branch_1, 1, 
+                                 function(x) x[sample(seq_along(x))])
+
+exprs(sce_shuffle)[, sce_shuffle$Branch == 1] <- 
+  t(exprs_branch_1_shuffled)
+
+message(varLabels(sce_shuffle))
+
+cowplot::plot_grid(
+  plotPCA(sce, colour_by = "Trajectory"),
+  plotPCA(sce_shuffle, colour_by = "Trajectory"),
+  labels = c("Original", "Branch 1 shuffled")
+  )
+
+# pct_dropout <- colMeans(exprs(sce) == 0) * 100
+# qplot(pct_dropout) + xlab("% dropout")
+
+plotTSNE(sce_shuffle[,sample(seq_len(ncol(sce_shuffle)), 800)], colour_by = "Trajectory", perplexity = 10)
+
+plotTSNE(sc[,sample(seq_len(ncol(sc)), 800)], colour_by = "Trajectory", perplexity = 10)
+```
+

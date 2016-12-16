@@ -14,8 +14,11 @@ knitr::opts_chunk$set(echo = TRUE, cache = TRUE, fig.width = 7, fig.height = 4,
                       warning = FALSE, message = FALSE)
 
 library(scater)
-library(readr)
-library(dplyr)
+library(tidyverse)
+library(viridis)
+
+devtools::dev_mode()
+library(mfa)
 ```
 
 # Load data
@@ -43,8 +46,174 @@ sce <- newSCESet(exprsData = gex, phenoData = AnnotatedDataFrame(pdata))
 
 ```{r pca-plots}
 plotPCA(sce, colour_by = "Trajectory", ncomponents = 3)
-plotPCA(sce, colour_by = "Branch", ncomponents = 3) + scale_fill_brewer(palette = "Set1")
+plotPCA(sce[, sample(ncol(sce), 5000)], colour_by = "Branch", ncomponents = 4) 
+
+plotTSNE(sce[, sample(ncol(sce), 2000)], colour_by = "Branch")
 ```
 
 
+
 # Inference
+
+
+```{r create-gex-matrix}
+set.seed(123L)
+# to_sample <- seq_len(ncol(sce)) 
+to_sample <- sample(seq_len(ncol(sce)), 2000)
+s <- sce[, to_sample]
+X <- t(exprs(s))
+```
+
+PCA plots using `prcomp`:
+
+```{r pca-using-prcomp}
+pca_df <- prcomp(scale(X))$x %>% as_data_frame() %>% 
+  mutate(branch = factor(s$Branch), pseudotime = s$Trajectory)
+
+ggplot(pca_df, aes(x = PC1, y = PC3, color = branch)) +
+  geom_point()
+
+ggplot(pca_df, aes(x = PC1, y = PC3, color = pseudotime)) +
+  geom_point()
+```
+
+
+
+```{r inference}
+set.seed(123L)
+mrna <- mfa(scale(X), iter = 100000, thin = 50, pc_initialise = 1, 
+         b = 2, tau_eta = 1, tau_theta = 1, prop_collapse = 0, tau_c = 0,
+         alpha = 1, beta = 1, alpha_chi = 1000, beta_chi = 1)
+```
+
+MCMC diagnostics:
+
+```{r mcmc-diagnostics}
+plot_mfa_trace(mrna)
+plot_mfa_autocorr(mrna)
+```
+
+```{r mfa-summary}
+mfa_summary <- summary(mrna)
+print(mfa_summary)
+```
+
+add this to SCESet:
+
+```{r add-to-sceset}
+for(col in names(mfa_summary)) pData(s)[[col]] <- NULL
+pData(s) <- cbind(pData(s), mfa_summary)
+```
+
+and plots:
+
+```{r plots}
+
+plotPCA(s, colour_by = "pseudotime", ncomponents = 3)
+plotPCA(s, colour_by = "branch", ncomponents = 4)
+
+
+plt1 <- plotPhenoData(s, aes_string(x = 'tSNE1', y = "tSNE2", color = "pseudotime"))
+plt2 <- plotPhenoData(s, aes_string(x = 'tSNE1', y = "tSNE2", 
+                            color = "branch", size = "1 / branch_certainty"))
+cowplot::plot_grid(plt1, plt2, nrow = 2)
+
+cowplot::plot_grid(
+  plotPhenoData(s, aes_string(x = 'tSNE1', y = "tSNE2", color = "CD15")),
+  plotPhenoData(s, aes_string(x = 'tSNE1', y = "tSNE2", color = "CD16")),
+  plotPhenoData(s, aes_string(x = 'tSNE1', y = "tSNE2", color = "CD38")),
+  ncol = 2, labels = c("CD15", "CD16", "CD38")
+)
+
+
+
+plotPhenoData(s, aes_string(x = "Trajectory", y = "pseudotime"))
+plotPhenoData(s, aes_string(x = "Branch", y = "branch"))
+
+```
+
+Plot all genes for future reference:
+
+```{r plot-all-genes, eval = FALSE}
+plots <- lapply(featureNames(s), function(f) plotPhenoData(s, aes_string(x = 'tSNE1', y = "tSNE2", color = f)))
+
+cowplot::plot_grid(plotlist = plots, nrow = 4, labels = featureNames(s))
+ggsave("../figs/monocyte2_all_genes.pdf", width = 20, height = 14)
+
+pca_plots <- lapply(featureNames(s), function(f) plotPCA(s, colour_by = f))
+cowplot::plot_grid(plotlist = pca_plots, nrow = 4, labels = featureNames(s))
+ggsave("../figs/monocyte2_all_genes_pca.pdf", width = 20, height = 14)
+
+```
+
+CD15 CD16 expression:
+
+```{r cd15}
+cd_df <- data_frame(CD15 = exprs(s)["CD15", ], CD16 = exprs(s)["CD16", ],
+                    wishbone_branch = factor(s$Branch))
+
+ggplot(cd_df, aes(x = CD15, y = CD16, color = wishbone_branch)) +
+  geom_point(alpha = 0.7) + scale_color_brewer(palette = "Set1")
+```
+
+## Shuffling of trunk
+
+```{r shuffle}
+
+sce_shuffle <- sce
+
+exprs_branch_1 <- exprs(sce_shuffle[, sce_shuffle$Branch == 1])
+
+exprs_branch_1_shuffled <- apply(exprs_branch_1, 1, 
+                                 function(x) x[sample(seq_along(x))])
+
+exprs(sce_shuffle)[, sce_shuffle$Branch == 1] <- 
+  t(exprs_branch_1_shuffled)
+
+message(varLabels(sce_shuffle))
+
+cowplot::plot_grid(
+  plotPCA(sce, colour_by = "Trajectory"),
+  plotPCA(sce_shuffle, colour_by = "Trajectory"),
+  labels = c("Original", "Branch 1 shuffled")
+  )
+
+# pct_dropout <- colMeans(exprs(sce) == 0) * 100
+# qplot(pct_dropout) + xlab("% dropout")
+
+plotTSNE(sce_shuffle[,sample(seq_len(ncol(sce_shuffle)), 800)], colour_by = "Trajectory", perplexity = 10)
+
+plotTSNE(sc[,sample(seq_len(ncol(sc)), 800)], colour_by = "Trajectory", perplexity = 10)
+```
+
+
+
+
+```{r plot-gex, fig.width = 12, fig.height = 10}
+gex_tidy <- X %>% as_data_frame() %>% 
+  mutate(pseudotime = mfa_summary$pseudotime, branch = factor(mfa_summary$branch)) %>% 
+  gather(gene, expression, -pseudotime, -branch)
+
+ggplot(gex_tidy, aes(x = pseudotime, y = expression, color = branch)) +
+  geom_point(alpha = 0.3) + stat_smooth(se = FALSE, method = "lm") + facet_wrap(~ gene, scales = "free_y") + scale_color_brewer(palette = "Set1")
+```
+
+```{r plot-gex-errorbars}
+ggplot(mfa_summary, aes(x = pseudotime, y = pseudotime, color = factor(branch), 
+                        ymin = pseudotime_lower, ymax = pseudotime_upper)) + 
+  geom_point() + geom_errorbar()
+```
+
+
+
+```{r chris-style-plot, fig.width = 12, fig.height = 10}
+ggplot(gex_tidy, aes(x = pseudotime, y = gene, 
+                    fill = expression)) + 
+  geom_jitter(shape = 21, color = 'black') +
+  facet_wrap(~ branch) + theme_classic() + viridis::scale_fill_viridis() 
+```
+
+
+
+
+
