@@ -17,6 +17,10 @@ library(scater)
 library(tidyverse)
 library(viridis)
 
+library(monocle)
+library(dpt)
+library(GGally)
+
 devtools::load_all("~/oxford/mfa/mfa")
 ```
 
@@ -33,7 +37,7 @@ wishbone_data <- data.frame(tpm[, (nc - 3):nc])
 tpm <- tpm[, 1:(nc - 4)]
 
 cellnames <- raw[[1]]
-pd <- mutate(wishbone_data, sample = cellnames)
+pd <- dplyr::mutate(wishbone_data, sample = cellnames)
 
 rownames(pd) <- cellnames
 tpm <- t(tpm)
@@ -78,9 +82,9 @@ X <- t(exprs(s))
 
 ```{r inference}
 set.seed(123L)
-mrna <- mfa(scale(X), iter = 100000, thin = 20, pc_initialise = 2, 
+mrna <- mfa(scale(X), iter = 40000, thin = 20, pc_initialise = 2, 
          b = 2, tau_eta = 1, tau_theta = 1, prop_collapse = 0,
-         alpha = 1, beta = 1, tau_c = 0.1, alpha_chi = 1000, beta_chi = 1)
+         alpha = 2, beta = 1, tau_c = 0.1, alpha_chi = 1000, beta_chi = 1)
 ```
 
 MCMC diagnostics:
@@ -105,29 +109,127 @@ pData(s) <- cbind(pData(s), mfa_summary)
 and plots:
 
 ```{r plots}
-ggplot(pData(s), aes(x = tSNE1, y = tSNE2, color = pseudotime)) + geom_point() +
-  scale_color_viridis()
-
-ggplot(pData(s), aes(x = tSNE1, y = tSNE2, color = factor(branch), 
-                     size = -branch_certainty)) + 
-  geom_point() +
-  scale_color_brewer(palette = "Set1")
-
-s$two_f_gamma <- (s$branch == 1) * s$branch_certainty +
-  (s$branch == 2) * (1 - s$branch_certainty)
-
-ggplot(pData(s), aes(x = tSNE1, y = tSNE2, color = two_f_gamma)) + 
-  geom_point() +
-  scale_color_viridis()
+# ggplot(pData(s), aes(x = tSNE1, y = tSNE2, color = pseudotime)) + geom_point() +
+#   scale_color_viridis()
+# 
+# ggplot(pData(s), aes(x = tSNE1, y = tSNE2, color = factor(branch), 
+#                      size = -branch_certainty)) + 
+#   geom_point() +
+#   scale_color_brewer(palette = "Set1")
+# 
 
 
-plt1 <- plotPhenoData(s, aes_string(x = 'tSNE1', y = "tSNE2", color = "pseudotime"))
+plt1 <- plotPhenoData(s, aes_string(x = 'tSNE1', y = "tSNE2", color = "pseudotime",
+                                    size = '1/branch_certainty'))
 plt2 <- plotPhenoData(s, aes_string(x = 'tSNE1', y = "tSNE2", 
                             color = "branch"))
 
-cowplot::plot_grid(plt1, plt2, nrow = 2)
+cowplot::plot_grid(plt1, plt2, nrow = 1)
+```
 
-  ```
+Plot bifurcating genes:
+
+```{r bif-genes}
+chi <- colMeans(mrna$traces$chi_trace)
+chi_df <- data_frame(gene = featureNames(s), value = chi)
+
+plotExpression(s, x = "pseudotime", colour_by = "branch",
+               features = arrange(chi_df, desc(value)) %>% extract2("gene") %>% head(n=10),
+               show_violin = FALSE, scales = 'free_y') + stat_smooth()
+```
+
+
+# Comparison to other pseudotime algorithms
+
+## plot PCA and find root cell
+
+```{r plot-pca}
+s <- plotPCA(s, return_SCESet = TRUE, colour_by = "Trajectory")
+root_cell <- which.max(redDim(s)[,2])
+pc2 <- redDim(s)[,2]
+```
+
+
+```{r fit-monocle}
+cds <- toCellDataSet(s)
+cds <- reduceDimension(cds)
+cds <- orderCells(cds, num_paths = 2)
+cds <- orderCells(cds, num_paths = 2, root_state = cds$State[root_cell])
+
+plot_cell_trajectory(cds, color_by = "Pseudotime")
+```
+
+## DPT
+
+```{r dpt}
+gene_sds <- matrixStats::rowSds(exprs(s))
+gene_collapse_sd <- 1e-6 * gene_sds
+new_exprs <- apply(exprs(s), 2, function(x) rnorm(length(x), x, gene_collapse_sd))
+
+ts <- Transitions(t(new_exprs))
+pt <- dpt(ts, branching = TRUE, root = root_cell) 
+```
+
+
+
+## Compare all
+
+```{r compare-all}
+df_compare <- data_frame(Wishbone = s$Trajectory,
+                         mfa = s$pseudotime,
+                         monocle = cds$Pseudotime,
+                         dpt = pt$DPT,
+                         pc2 = pc2)
+
+png("~/Desktop/pst_compare_scrnaseq.png", width=800,height=700)
+ggpairs(as.data.frame(df_compare))
+dev.off()
+```
+
+
+Comparison of branch allocations:
+
+```{r compare_branch_allocations}
+branch_df <- data_frame(mfa = mfa_summary$branch,
+                        wishbone = factor(s$Branch),
+                        monocle = cds$State,
+                        dpt = pt$Branch,
+                        tSNE1 = s$tSNE1,
+                        tSNE2 = s$tSNE2)
+
+algorithms <- c("mfa", "wishbone", "monocle", "dpt")
+
+plot_bif <- function(alg) ggplot(branch_df, aes_string(x = "tSNE1", y = "tSNE2", color = alg)) + 
+  geom_point() + scale_color_brewer(palette = "Set1", name = "Branch") +
+  cowplot::theme_cowplot()
+
+bif_plots <- lapply(algorithms, plot_bif)
+
+cowplot::plot_grid(plotlist = bif_plots, labels = algorithms)
+
+```
+
+## Testing with larger number of components
+
+```{r larger-components}
+set.seed(123L)
+
+mrnashrink <- mfa(scale(X), iter = 40000, thin = 20, pc_initialise = 2, 
+         b = 5, tau_eta = 1, tau_theta = 1, prop_collapse = 0,
+         alpha = 1, beta = 1, tau_c = 0.1, alpha_chi = 1000, beta_chi = 1, 
+         w_alpha = 100)
+
+mfa_summary <- summary(mrnashrink)
+print(mfa_summary)
+
+s$shrink_branch <- mfa_summary$branch
+s$shrink_pst <- mfa_summary$pseudotime
+
+plotPhenoData(s, aes(x = tSNE1, y = tSNE2, color = shrink_branch))
+plotPhenoData(s, aes(x = tSNE1, y = tSNE2, color = shrink_pst))
+
+```
+
 
 ## Shuffling of trunk
 

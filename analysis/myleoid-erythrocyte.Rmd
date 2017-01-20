@@ -15,7 +15,10 @@ knitr::opts_chunk$set(echo = TRUE, cache = TRUE, fig.width = 7, fig.height = 4,
 
 library(scater)
 library(tidyverse)
-library(preprocessCore)
+
+# library(monocle)
+# library(dpt)
+# library(GGally)
 
 # library(devtools)
 # 
@@ -56,11 +59,11 @@ plotPCA(sce, colour_by = "Branch") + scale_fill_brewer(palette = "Set1")
 
 ```{r subset}
 set.seed(123L)
-sce_subset <- sce[, sample(ncol(sce), 1000)]
+sce_subset <- sce[, sample(ncol(sce), 2000)]
 
 y <- t(exprs(sce_subset))
 
-plotPCA(sce_subset, colour_by = "Branch")
+sce_subset <- plotPCA(sce_subset, colour_by = "Branch", return_SCESet = TRUE)
 plotPCA(sce_subset, colour_by = "Trajectory")
 ```
 
@@ -68,9 +71,9 @@ plotPCA(sce_subset, colour_by = "Trajectory")
 
 ```{r mfa}
 y_scaled <- scale(y)
-m <- mfa(y_scaled, iter = 80000, thin = 20, pc_initialise = 2, 
+m <- mfa(y_scaled, iter = 20000, thin = 5, pc_initialise = 2, 
          b = 2, tau_eta = 1, tau_theta = 1, tau_c = 0.1, prop_collapse = 0,
-         alpha = 1, beta = 1, alpha_chi = 1000, beta_chi = 1)
+         alpha = 2, beta = 1, alpha_chi = 1000, beta_chi = 1)
 
  print( m )
 ```
@@ -80,11 +83,10 @@ MCMC diagnostics:
 ```{r mcmc-diagnostics}
 plot_mfa_trace(m)
 plot_mfa_autocorr(m)
-
 ```
 
 ```{r mfa-summary}
-  mfa_summary <- summary(m)
+mfa_summary <- summary(m)
 print(mfa_summary)
 ```
 
@@ -98,7 +100,7 @@ pData(sce_subset) <- cbind(pData(sce_subset), mfa_summary)
 and plots:
 
 ```{r plots, fig.width = 5, fig.height = 10}
- cowplot::plot_grid(plotPCA(sce_subset, colour_by = "branch"),
+cowplot::plot_grid(plotPCA(sce_subset, colour_by = "branch"),
            plotPCA(sce_subset, colour_by = "pseudotime"), nrow = 2)
 
 plt1 <- plotPhenoData(sce_subset, aes_string(x = 'tSNE1', y = "tSNE2", color = "pseudotime"))
@@ -111,7 +113,7 @@ cowplot::plot_grid(plt1, plt2, nrow = 2)
 
 ```{r plot-gex, fig.width = 12, fig.height = 10}
 gex_tidy <- y %>% as_data_frame() %>% 
-  mutate(pseudotime = mfa_summary$pseudotime, branch = factor(mfa_summary$branch)) %>% 
+  dplyr::mutate(pseudotime = mfa_summary$pseudotime, branch = factor(mfa_summary$branch)) %>% 
   gather(gene, expression, -pseudotime, -branch)
 
 ggplot(gex_tidy, aes(x = pseudotime, y = expression, color = branch)) +
@@ -132,6 +134,36 @@ ggplot(gex_tidy, aes(x = pseudotime, y = gene,
   geom_jitter(shape = 21, color = 'black') +
   facet_wrap(~ branch) + theme_classic() + viridis::scale_fill_viridis() 
 ```
+
+
+# Comparison to alternative pseudotime algorithms
+
+### Monocle
+
+```{r fit-monocle}
+root_cell <- which.min(redDim(sce_subset)[,2])
+
+cds <- toCellDataSet(sce_subset)
+cds <- reduceDimension(cds)
+cds <- orderCells(cds, num_paths = 2)
+cds <- orderCells(cds, num_paths = 2, root_state = 18)
+
+plot_cell_trajectory(cds, color_by = "Pseudotime")
+plot_cell_trajectory(cds, color_by = "State")
+```
+
+## DPT
+
+```{r dpt}
+gene_sds <- matrixStats::rowSds(exprs(sce_subset))
+gene_collapse_sd <- 1e-6 * gene_sds
+new_exprs <- apply(exprs(sce_subset), 2, function(x) rnorm(length(x), x, gene_collapse_sd))
+
+ts <- Transitions(t(new_exprs))
+pt <- dpt(ts, branching = TRUE, root = root_cell) 
+```
+
+
 
 
 ## Shuffling of trunk
