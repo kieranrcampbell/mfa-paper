@@ -1,0 +1,284 @@
+---
+title: "Gwecke test for consistency of Gibbs sampler"
+author: "Kieran Campbell"
+date: "January 2016"
+output: html_document
+---
+
+See https://arxiv.org/pdf/1412.5218v1.pdf
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+
+library(tidyverse)
+library(Rcpp)
+library(testthat)
+
+#source("../gibbs/phenotime.R")
+#sourceCpp("../gibbs/phenotime.cpp")
+#source("../gibbs/gwecke.R")
+
+devtools::load_all("~/oxford/mfa/mfa")
+
+set.seed(123L)
+
+scale_vec <- function(x) (x - mean(x)) / sd(x)
+
+## Handy function
+log_dnorm <- function(x, mean, precision) dnorm(x, mean, 1 / sqrt(precision), log = TRUE)
+```
+
+# Setup
+
+Make some synthetic x and an initial y:
+
+```{r synthetic}
+N <- 80
+G <- 8
+b <- B <- 2
+
+# x <- scale(matrix(sample(0:1, size = N * P, replace = TRUE), ncol = ))
+
+```
+
+Specify hyperparameter values:
+
+
+```{r hyperpar-vals}
+alpha = 1 
+beta = 1
+theta_tilde = 0
+eta_tilde = 0
+tau_eta = 1
+tau_theta = 1
+tau_c = 1
+alpha_chi = 1
+beta_chi = 1
+w_alpha = 1 / b
+r <- 1
+```
+
+Sample values:
+
+```{r init-vals}
+w <- MCMCpack::rdirichlet(1, c(1/B, 1/B))
+
+gamma <- sample(c(1,2), N, prob = w, replace = TRUE)
+
+eta <- rnorm(B, 0, 1)
+theta <- rnorm(G, 0, 1)
+
+## precision parameters
+tau <- rep(1, G)
+
+chi <- rgamma(G, alpha_chi, beta_chi)
+
+c <- matrix(rnorm(G*B), ncol = B)
+k <- matrix(rnorm(G*B), ncol = B)
+
+## pseudotime parameters
+pst <-  rnorm(N)
+
+## parameter initialisation
+y <- sapply(1:N, function(i) {
+  m <- c[,gamma[i]] + k[,gamma[i]] * pst[i]
+  rnorm(G, m, 1 / sqrt(tau))
+})
+y <- t(y)
+```
+
+
+# Unit tests
+
+This is going to be tedious
+
+## k
+
+```{r unit-test-k}
+nu_k <- calculate_nuk(y, pst, c[,1], tau, theta, chi, gamma == 1)
+lam_k <- calculate_lamk(chi, tau, pst, gamma == 1)
+
+kp <- k; kp[1] <- 0
+
+rhs <- posterior(y, c, kp, pst, tau, gamma, theta, eta, chi, w, tau_c, r, alpha, beta,
+                      theta_tilde, eta_tilde, tau_theta, tau_eta, alpha_chi, beta_chi) -
+        posterior(y, c, k, pst, tau, gamma, theta, eta, chi, w, tau_c, r, alpha, beta,
+                      theta_tilde, eta_tilde, tau_theta, tau_eta, alpha_chi, beta_chi)
+
+lhs <- sum(log_dnorm(kp[,1], nu_k / lam_k, lam_k)) -
+  sum(log_dnorm(k[,1], nu_k / lam_k, lam_k))
+
+expect_equal(lhs, rhs)
+```
+
+## k
+
+```{r unit-testing-c}
+nu_c <- calculate_nuc(y, pst, k[,1], tau, eta[1], tau_c, gamma == 1)
+lam_c <- calculate_lamc(tau, tau_c, sum(gamma == 1))
+
+cp <- c; cp[1] <- 0
+
+rhs <- posterior(y, cp, k, pst, tau, gamma, theta, eta, chi, w, tau_c, r, alpha, beta,
+                      theta_tilde, eta_tilde, tau_theta, tau_eta, alpha_chi, beta_chi) -
+        posterior(y, c, k, pst, tau, gamma, theta, eta, chi, w, tau_c, r, alpha, beta,
+                      theta_tilde, eta_tilde, tau_theta, tau_eta, alpha_chi, beta_chi)
+
+lhs <- sum(log_dnorm(cp[,1], nu_c / lam_c, lam_c)) -
+  sum(log_dnorm(c[,1], nu_c / lam_c, lam_c))
+
+expect_equal(lhs, rhs)
+```
+
+## pst
+
+```{r unit-testing-pst}
+pst_par <- pst_update_par(y, c, k, r, gamma, tau)
+
+pstp <- pst; pstp[1] <- 0
+
+
+rhs <- posterior(y, c, k, pstp, tau, gamma, theta, eta, chi, w, tau_c, r, alpha, beta,
+                      theta_tilde, eta_tilde, tau_theta, tau_eta, alpha_chi, beta_chi) -
+        posterior(y, c, k, pst, tau, gamma, theta, eta, chi, w, tau_c, r, alpha, beta,
+                      theta_tilde, eta_tilde, tau_theta, tau_eta, alpha_chi, beta_chi)
+
+lhs <- log_dnorm(pstp[1], pst_par[1,1], pst_par[1,2]) -
+    log_dnorm(pst[1], pst_par[1,1], pst_par[1,2])
+
+expect_equal(lhs, rhs)
+```
+
+## Tau
+
+```{r unit-testing-tau}
+tau_par <- tau_params(y, c, k, gamma, pst, alpha, beta)
+
+taup <- tau
+taup[1] <- 2
+
+rhs <- posterior(y, c, k, pst, taup, gamma, theta, eta, chi, w, tau_c, r, alpha, beta,
+                      theta_tilde, eta_tilde, tau_theta, tau_eta, alpha_chi, beta_chi) -
+        posterior(y, c, k, pst, tau, gamma, theta, eta, chi, w, tau_c, r, alpha, beta,
+                      theta_tilde, eta_tilde, tau_theta, tau_eta, alpha_chi, beta_chi)
+lhs <- dgamma(taup[1], tau_par[1,1], tau_par[1,2], log = TRUE) -
+  dgamma(tau[1], tau_par[1,1], tau_par[1,2], log = TRUE)
+
+expect_equal(lhs, rhs)
+```
+
+## Theta
+
+```{r unit-testing-theta}
+## From R code
+lambda_theta <- 2 * chi + tau_theta
+nu_theta <- tau_theta * theta_tilde + chi * rowSums(k)
+nu_theta <- nu_theta / lambda_theta
+
+thetap <- theta; thetap[1] <- 0
+
+
+rhs <- posterior(y, c, k, pst, tau, gamma, thetap, eta, chi, w, tau_c, r, alpha, beta,
+                      theta_tilde, eta_tilde, tau_theta, tau_eta, alpha_chi, beta_chi) -
+        posterior(y, c, k, pst, tau, gamma, theta, eta, chi, w, tau_c, r, alpha, beta,
+                      theta_tilde, eta_tilde, tau_theta, tau_eta, alpha_chi, beta_chi)
+
+lhs <- log_dnorm(thetap[1], nu_theta[1], lambda_theta[1]) -
+    log_dnorm(theta[1], nu_theta[1], lambda_theta[1])
+
+expect_equal(lhs, rhs)
+```
+
+## Eta
+
+```{r unit-testing-eta}
+## From R code
+lambda_eta <- tau_eta + G * tau_c
+nu_eta <- tau_eta * eta_tilde + tau_c * colSums(c)
+nu_eta <- nu_eta / lambda_eta
+
+etap <- eta
+etap[1] <- 0
+
+rhs <- posterior(y, c, k, pst, tau, gamma, theta, etap, chi, w, tau_c, r, alpha, beta,
+                      theta_tilde, eta_tilde, tau_theta, tau_eta, alpha_chi, beta_chi) -
+        posterior(y, c, k, pst, tau, gamma, theta, eta, chi, w, tau_c, r, alpha, beta,
+                      theta_tilde, eta_tilde, tau_theta, tau_eta, alpha_chi, beta_chi)
+
+lhs <- log_dnorm(etap[1], nu_eta[1], lambda_eta[1]) -
+    log_dnorm(eta[1], nu_eta[1], lambda_eta[1])
+
+expect_equal(lhs, rhs)
+
+```
+
+
+## Chi
+
+```{r unit-testing-chi}
+## Updates in R code (bad programmer!)
+alpha_new <- alpha_chi + b / 2
+beta_new <- beta_chi + 0.5 * rowSums( (k - theta)^2 )
+
+chip <- chi
+chip[1] <- 2
+
+rhs <- posterior(y, c, k, pst, tau, gamma, theta, eta, chip, w, tau_c, r, alpha, beta,
+                      theta_tilde, eta_tilde, tau_theta, tau_eta, alpha_chi, beta_chi) -
+        posterior(y, c, k, pst, tau, gamma, theta, eta, chi, w, tau_c, r, alpha, beta,
+                      theta_tilde, eta_tilde, tau_theta, tau_eta, alpha_chi, beta_chi)
+
+lhs <- dgamma(chip[1], alpha_new, beta_new[1], log = TRUE) -
+  dgamma(chi[1], alpha_new, beta_new[1], log = TRUE)
+
+expect_equal(lhs, rhs)
+
+```
+
+## Pi
+
+```{r testpi}
+# # Gelman's
+log_sum_exp2 <- function(u, v)  max(u, v) + log(exp(u - max(u, v)) + exp(v - max(u, v)))
+
+## Test something small
+c <- 20; g <- 10
+y2 <- matrix(rnorm(c * g), nrow = c, ncol = g)
+c <- matrix(rnorm(g * 2), ncol = 2)
+k <- matrix(rnorm(g * 2), ncol = 2)
+pst <- rnorm(c)
+tau <- rgamma(g, 2, 1)
+# means <- sapply(1:2, function(b) c[1,b] + k[1, b] * pst)
+
+uprobs <- sapply(1:2, function(br) {
+  sapply(1:20, function(cell) {
+    sum(dnorm(y2[cell, ], c[,br] + k[,br] * pst[cell], 1 / sqrt(tau), log = TRUE)) + log(0.5)
+  })
+})
+
+probs <- t(apply(uprobs, 1, function(x) {
+  denom <- log_sum_exp2(x[1], x[2])
+  exp(x - denom)
+}))
+
+probs_pi <- calculate_pi(y2, c, k, pst, tau, eta, tau_c, FALSE, log(c(0.5, 0.5)))
+```
+
+```{r unit-testing-pi}
+yp <- y; yp[1] <- 0
+pi <- calculate_pi(y, c, k, pst, tau, eta, tau_c, FALSE, log(w), log_result = TRUE)
+pip <- calculate_pi(yp, c, k, pst, tau, eta, tau_c, FALSE, log(w), log_result = TRUE)
+
+lhs <- log(pip[1, gamma[1]]) - log(pi[1, gamma[1]])
+
+rhs <- posterior(yp[1, ,drop=F], c, k, pst[1], tau, gamma[1], 
+                 theta, eta, chi, w, tau_c, r, alpha, beta,
+                      theta_tilde, eta_tilde, tau_theta, tau_eta, alpha_chi, beta_chi) -
+        posterior(y[1,, drop=F], c, k, pst[1], tau, gamma[1], 
+                  theta, eta, chi, w, tau_c, r, alpha, beta,
+                      theta_tilde, eta_tilde, tau_theta, tau_eta, alpha_chi, beta_chi)
+
+
+```
+
+

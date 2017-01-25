@@ -1,7 +1,7 @@
 ---
 title: "HSPC scRNA-seq analysis"
 author: "Kieran Campbell"
-date: "26 September 2016"
+date: "January 2017"
 output:
   html_document:
     highlight: tango
@@ -13,9 +13,12 @@ output:
 knitr::opts_chunk$set(echo = TRUE, cache = TRUE, fig.width = 7, fig.height = 4,
                       warning = FALSE, message = FALSE)
 
-library(scater)
+
 library(tidyverse)
+library(scater)
 library(viridis)
+library(magrittr)
+library(cowplot)
 
 library(monocle)
 library(dpt)
@@ -52,6 +55,7 @@ Let's subset to something reasonable:
 
 ```{r subset}
 sc <- sce[rowMeans(exprs(sce) > 0) > 0.2, ] # expressed in at least 20% of cells
+rm(sce)
 ```
 
 # Plots
@@ -75,16 +79,17 @@ to_use <- vars > 5
 ```{r create-gex-matrix}
 set.seed(123L)
 # to_sample <- seq_len(ncol(sce)) 
-to_sample <- sample(seq_len(ncol(sce)), 500)
+to_sample <- sample(seq_len(ncol(sc)), 500)
 s <- sc[to_use, to_sample]
 X <- t(exprs(s))
+rm(sc)
 ```
 
 ```{r inference}
 set.seed(123L)
 mrna <- mfa(scale(X), iter = 40000, thin = 20, pc_initialise = 2, 
-         b = 2, tau_eta = 1, tau_theta = 1, prop_collapse = 0,
-         alpha = 2, beta = 1, tau_c = 0.1, alpha_chi = 1000, beta_chi = 1)
+         b = 2, tau_eta = 1e-2, tau_theta = 1e-2,
+        tau_c = 1)
 ```
 
 MCMC diagnostics:
@@ -119,12 +124,11 @@ and plots:
 # 
 
 
-plt1 <- plotPhenoData(s, aes_string(x = 'tSNE1', y = "tSNE2", color = "pseudotime",
-                                    size = '1/branch_certainty'))
-plt2 <- plotPhenoData(s, aes_string(x = 'tSNE1', y = "tSNE2", 
-                            color = "branch"))
+plt1 <- plotPhenoData(s, aes_string(x = 'tSNE1', y = "tSNE2", color = "pseudotime"))
+plt2 <- plotPhenoData(s, aes_string(x = 'tSNE1', y = "tSNE2", color = "branch"))
+plt3 <- plotPhenoData(s, aes_string(x = 'tSNE1', y = "tSNE2", color = "branch_certainty"))
 
-cowplot::plot_grid(plt1, plt2, nrow = 1)
+cowplot::plot_grid(plt1, plt2, plt3)
 ```
 
 Plot bifurcating genes:
@@ -134,8 +138,68 @@ chi <- colMeans(mrna$traces$chi_trace)
 chi_df <- data_frame(gene = featureNames(s), value = chi)
 
 plotExpression(s, x = "pseudotime", colour_by = "branch",
-               features = arrange(chi_df, desc(value)) %>% extract2("gene") %>% head(n=10),
+               features = dplyr::arrange(chi_df, value) %>% magrittr::extract2("gene") %>% head(n=10),
                show_violin = FALSE, scales = 'free_y') + stat_smooth()
+```
+
+
+## Plots for figure:
+
+```{r plots-for-figure}
+library(cowplot)
+pd_df <- select(pData(s), tSNE1, tSNE2, pseudotime, branch) 
+
+pst_plot <- ggplot(pd_df, aes(x = tSNE1, y = tSNE2, color = pseudotime)) +
+  geom_point(alpha = 0.7) + scale_color_viridis(name = expression(t))
+
+branch_plot <- ggplot(pd_df, aes(x = tSNE1, y = tSNE2, color = branch)) +
+  geom_point(alpha = 0.7) + 
+  scale_color_brewer(palette = "Set1", name = expression(paste("MAP ", gamma)))
+
+```
+
+```{r plots-for-figure2}
+chimap <- colMeans(mrna$traces$chi_trace)
+chi_df <- data_frame(gene = featureNames(s), chi_inv = 1 / chimap)
+top <- dplyr::arrange(chi_df, desc(chi_inv)) %>% extract2("gene") %>% head(n = 20)
+bottom <- dplyr::arrange(chi_df, chi_inv) %>% extract2("gene") %>% head(n = 20)
+
+chi_df_reduced <- dplyr::filter(chi_df, gene %in% c(top, bottom)) %>% 
+  dplyr::arrange(desc(chi_inv))
+chi_df_reduced$gene <- factor(chi_df_reduced$gene, levels = chi_df_reduced$gene)
+
+chi_plot <- ggplot(chi_df_reduced, aes(x = gene, y = chi_inv)) +
+  geom_bar(stat = 'identity') + coord_flip() +
+  theme(axis.title.y = element_blank(),
+        axis.text.y = element_text(size = 9)) +
+  ylab(expression(paste("[MAP ", chi[g] ,"]" ^ "-1"))) 
+
+genes <- c("ELANE", "CAR2", "RPL26")
+gex <- t(exprs(s)[genes, ])
+
+pd_tidy <- as_data_frame(cbind(pd_df, gex)) %>% 
+  gather(gene, Expression, -(tSNE1:branch))
+
+plot_gene <- function(g) {
+  ggplot(dplyr::filter(pd_tidy, gene == g), aes(x = tSNE1, y = tSNE2, color = log(Expression + 1))) +
+  geom_point() + scale_color_viridis(name = g) 
+}
+
+expression_plots <- lapply(genes, plot_gene)
+
+ex_plot <- plot_grid(plotlist = expression_plots, ncol = 1)
+```
+
+Combine into upper grid:
+
+```{r upper-grid}
+upper_grid <- plot_grid(
+  plot_grid(pst_plot, branch_plot, ncol = 1, labels = c("A", "B")),
+  chi_plot,
+  ex_plot,
+  ncol = 3, labels = c("", "C", "D"), rel_widths = c(3,2.4,2.4)
+)
+
 ```
 
 
@@ -152,7 +216,7 @@ pc2 <- redDim(s)[,2]
 
 ```{r fit-monocle}
 cds <- toCellDataSet(s)
-cds <- reduceDimension(cds)
+cds <- reduceDimension(cds, norm_method = "none")
 cds <- orderCells(cds, num_paths = 2)
 cds <- orderCells(cds, num_paths = 2, root_state = cds$State[root_cell])
 
@@ -162,11 +226,11 @@ plot_cell_trajectory(cds, color_by = "Pseudotime")
 ## DPT
 
 ```{r dpt}
-gene_sds <- matrixStats::rowSds(exprs(s))
-gene_collapse_sd <- 1e-6 * gene_sds
-new_exprs <- apply(exprs(s), 2, function(x) rnorm(length(x), x, gene_collapse_sd))
+# gene_sds <- matrixStats::rowSds(exprs(s))
+# gene_collapse_sd <- 1e-6 * gene_sds
+# new_exprs <- apply(exprs(s), 2, function(x) rnorm(length(x), x, gene_collapse_sd))
 
-ts <- Transitions(t(new_exprs))
+ts <- Transitions(t(exprs(s)))
 pt <- dpt(ts, branching = TRUE, root = root_cell) 
 ```
 
@@ -177,37 +241,63 @@ pt <- dpt(ts, branching = TRUE, root = root_cell)
 ```{r compare-all}
 df_compare <- data_frame(Wishbone = s$Trajectory,
                          mfa = s$pseudotime,
-                         monocle = cds$Pseudotime,
-                         dpt = pt$DPT,
-                         pc2 = pc2)
+                         Monocle = cds$Pseudotime,
+                         DPT = pt$DPT,
+                         PC2 = pc2)
 
-png("~/Desktop/pst_compare_scrnaseq.png", width=800,height=700)
-ggpairs(as.data.frame(df_compare))
-dev.off()
+df_tidy <- gather(df_compare, algorithm, value, -mfa) 
+df_tidy$algorithm <- factor(df_tidy$algorithm, 
+                            levels = c("PC2", "Wishbone", "Monocle", "DPT"))
+
+pst_compare_plot <- ggplot(df_tidy, aes(x = mfa, y = value)) + 
+  facet_wrap(~ algorithm, scales = "free_y", nrow = 1) +
+  geom_point(alpha = 0.6) +
+  xlab("MFA pseudotime") + ylab("Algorithm pseudotime")
 ```
 
 
 Comparison of branch allocations:
 
 ```{r compare_branch_allocations}
-branch_df <- data_frame(mfa = mfa_summary$branch,
-                        wishbone = factor(s$Branch),
-                        monocle = cds$State,
-                        dpt = pt$Branch,
+branch_df <- data_frame(Wishbone = factor(s$Branch),
+                        Monocle = cds$State,
+                        DPT = pt$Branch,
                         tSNE1 = s$tSNE1,
                         tSNE2 = s$tSNE2)
 
-algorithms <- c("mfa", "wishbone", "monocle", "dpt")
+algorithms <- c("Wishbone", "Monocle", "DPT")
 
-plot_bif <- function(alg) ggplot(branch_df, aes_string(x = "tSNE1", y = "tSNE2", color = alg)) + 
-  geom_point() + scale_color_brewer(palette = "Set1", name = "Branch") +
-  cowplot::theme_cowplot()
+plot_bif <- function(alg) {
+  ggplot(branch_df, aes_string(x = "tSNE1", y = "tSNE2", color = alg)) + 
+    geom_point() + 
+    scale_color_brewer(palette = "Set1", name = paste(alg,"\nbranch")) +
+    cowplot::theme_cowplot() +
+    theme(legend.title = element_text(size = 10, face = "bold"))
+}
 
 bif_plots <- lapply(algorithms, plot_bif)
 
-cowplot::plot_grid(plotlist = bif_plots, labels = algorithms)
+bottom_grid <- cowplot::plot_grid(plotlist = bif_plots, nrow = 1,
+                   rel_widths = c(3,3,3.7))
 
 ```
+
+Put it together for overall plot:
+
+```{r overall-plot}
+
+plot_grid(
+  upper_grid,
+  pst_compare_plot,
+  bottom_grid,
+  rel_heights = c(2.7,1,1), labels = c("", "E", "F"),
+  ncol = 1
+)
+
+ggsave("../figs/scrnaseq_fig.png", width = 10, height = 12)
+
+```
+
 
 ## Testing with larger number of components
 
