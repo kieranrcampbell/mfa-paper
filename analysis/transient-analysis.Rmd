@@ -1,0 +1,105 @@
+---
+title: "Impact of transient gene expression on pseudotime algorithms"
+author: "Kieran Campbell"
+date: "January 2017"
+output:
+  html_document:
+    highlight: tango
+    number_sections: yes
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE, fig.width = 7, fig.height = 4,
+                      warning = FALSE, message = FALSE)
+
+
+library(tidyverse)
+
+library(viridis)
+library(magrittr)
+library(cowplot)
+
+library(monocle)
+library(dpt)
+library(GGally)
+
+devtools::load_all("~/oxford/mfa/mfa")
+
+source("create_synthetic.R")
+```
+
+Create synthetic dataset:
+
+```{r create-synthetic}
+set.seed(123L)
+synth <- create_synthetic(C = 200, G = 10, p_transient = 0.5)
+
+X <- synth$X; pst <- synth$pst; branch <- synth$branch
+
+pca <- prcomp(t(X))
+
+pca_tidy <- as_data_frame(pca$x[,1:2]) %>% 
+  dplyr::mutate(pst, branch = factor(branch))
+
+ggplot(pca_tidy, aes(x = PC1, y = PC2, colour = pst)) +
+  geom_point() + scale_color_viridis()
+
+ggplot(pca_tidy, aes(x = PC1, y = PC2, fill = branch)) +
+  geom_point(shape = 21, alpha = 0.5) + 
+  scale_fill_brewer(palette = "Set1")
+```
+
+Plot gene styles:
+
+```{r plot-genes}
+rownames(X) <- paste0("gene_", 1:nrow(X))
+x_t <- as_data_frame(t(X)) %>% mutate(pst) %>% 
+  gather(gene, expression, -pst)
+
+x_t <- filter(x_t, gene %in% c("gene_3", "gene_5"))
+x_t$gene_type <- factor(plyr::mapvalues(x_t$gene, from = c("gene_3", "gene_5"),
+                                 to = c("Monotonic gene", "Transient gene")))
+
+ggplot(x_t, aes(x = pst, y = expression, color = pst)) + 
+  facet_wrap(~gene_type, scales = 'free_y') +
+  geom_point() + 
+  stat_smooth(se = F, size = 0.5, color = 'black', aes(alpha = 0.7)) +
+  theme(legend.position = "none") +
+  scale_color_viridis() +
+  ylab("Expression") + xlab("Pseudotime")
+```
+
+
+
+```{r analyse-analysis-results}
+data_dir <- "simulations/data"
+csv_files <- dir(data_dir, full.names = TRUE)
+
+dfs <- lapply(csv_files, read_csv)
+df_full <- bind_rows(dfs)
+
+df_reduced <- group_by(df_full, p_transient, rep) %>% 
+  summarise(
+    Monocle = abs(cor(monocle, true_pst)),
+    DPT = abs(cor(dpt, true_pst)),
+    MFA = abs(cor(mfa, true_pst))
+  )
+
+df_reduced <- gather(df_reduced, algorithm, correlation,
+                     -p_transient, -rep)
+df_reduced$p_transient <- factor(df_reduced$p_transient)
+df_reduced$algorithm[df_reduced$algorithm == "Monocle"] <- "Monocle 2"
+```
+
+
+and plot results:
+
+```{r plot-results}
+ggplot(df_reduced, aes(x = p_transient, 
+                       y = correlation, fill = algorithm)) +
+  geom_boxplot(alpha = 0.7) +
+  xlab("Proportion of genes transient") +
+  ylab("Correlation to true pseudotime") +
+  scale_fill_brewer(palette = "Set1", name = "Algorithm") 
+```

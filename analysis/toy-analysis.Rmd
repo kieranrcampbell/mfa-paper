@@ -32,7 +32,7 @@ source("create_synthetic.R")
 Create synthetic dataset:
 
 ```{r create-synthetic}
-synth <- create_synthetic(C = 100, G = 50)
+synth <- create_synthetic(C = 100, G = 50, p_transient = 0.5)
 
 X <- synth$X; pst <- synth$pst; branch <- synth$branch
 
@@ -40,6 +40,13 @@ pca <- prcomp(t(X))
 
 pca_tidy <- as_data_frame(pca$x[,1:2]) %>% 
   dplyr::mutate(pst, branch = factor(branch))
+
+ggplot(pca_tidy, aes(x = PC1, y = PC2, colour = pst)) +
+  geom_point() + scale_color_viridis()
+
+ggplot(pca_tidy, aes(x = PC1, y = PC2, fill = branch)) +
+  geom_point(shape = 21, alpha = 0.5) + 
+  scale_fill_brewer(palette = "Set1")
 ```
 
 
@@ -47,8 +54,8 @@ MFA it:
 
 ```{r mfa}
 y <- scale(t(X))
-m <- mfa(y, iter = 1e6, b = 2, thin = 50, pc_initialise = 1, 
-         alpha = 1e-2, beta = 1e-2,
+m <- mfa(y, iter = 1e5, b = 2, thin = 50, pc_initialise = 1, 
+         alpha = 1e-1, beta = 1e-1,
          alpha_chi = 1e-2, beta_chi = 1e-2)
 plot_mfa_trace(m)
 plot_mfa_autocorr(m)
@@ -62,12 +69,14 @@ pca_tidy$mfa_pseudotime <- ms$pseudotime
 pca_tidy$mfa_branch <- ms$branch
 pca_tidy$branch_certainty <- ms$branch_certainty
 
-pseudotime_plot <- ggplot(pca_tidy, aes(x = PC1, y = PC2, colour = mfa_pseudotime)) +
+ggplot(pca_tidy, aes(x = PC1, y = PC2, colour = mfa_pseudotime)) +
   geom_point() + scale_color_viridis(name = "MAP t")
+pseudotime_plot <- last_plot()
 
-branch_plot <- ggplot(pca_tidy, aes(x = PC1, y = PC2, fill = mfa_branch)) +
+ggplot(pca_tidy, aes(x = PC1, y = PC2, fill = mfa_branch)) +
   geom_point(shape = 21, alpha = 0.5) + 
   scale_fill_brewer(palette = "Set1", name = expression(paste("MAP ", gamma)))
+branch_plot <- last_plot()
 
 chimap <- colMeans(m$traces$chi_trace)
 chi_df <- data_frame(gene = paste0("gene", 1:50), chi_inv = 1 / chimap,

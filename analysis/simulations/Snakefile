@@ -1,0 +1,26 @@
+
+
+"""
+Transient gene pseudotime analysis for mfa paper
+2017-1-30
+"""
+reps = list(range(1,21))
+Cs = 200
+Gs = 50
+p_transients = [0, 0.2, 0.4, 0.6, 0.8]
+R_opts = "--vanilla"
+
+
+output_files = expand("data/pseudotime_results_{C}_{G}_{p_transient}_{rep}.csv",
+C = Cs, G = Gs, p_transient = p_transients, rep = reps)
+
+rule all:
+    input:
+        output_files
+
+
+rule fit_transient_pseudotimes:
+    output:
+        "data/pseudotime_results_{C}_{G}_{p_transient}_{rep}.csv"
+    shell:
+        "Rscript {R_opts} fit_pseudotimes.R {wildcards.C} {wildcards.G} {wildcards.p_transient} {wildcards.rep}"
