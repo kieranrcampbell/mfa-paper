@@ -26,6 +26,10 @@ synth <- create_synthetic(C = C, G = G, lambda = lambda, model_dropout = TRUE)
 # X is gene-by-cell (like an ExpressionSet)
 X <- synth$X; pst <- synth$pst
 
+row_vars <- matrixStats::rowVars(X)
+X <- X[row_vars > 0, ] # filter out zero variance genes
+G <- nrow(X)
+
 pc12 <- prcomp(t(X))$x[,1:2]
 pc_cors <- apply(pc12, 2, cor, pst)
 pc_initialise <- which.max(abs(pc_cors))

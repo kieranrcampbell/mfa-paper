@@ -122,6 +122,16 @@ create_synthetic <- function(C = 100, G = 40, p_transient = 0,
     }
   }
   
+  # row_vars <- matrixStats::rowVars(X)
+  # if(any(row_vars == 0)) {
+  #   zero_genes <- which(row_vars == 0)
+  #   for(g in zero_genes) {
+  #     N_cells <- sample(seq_len(C / 5), 1) # how many cells to add stochastic expression to
+  #     which_cells <- sample(seq_len(C), N_cells)
+  #     X[g,which_cells] <- runif(N_cells, 0, 0.5) # add small noise
+  #   }
+  # }
+  
   list(X = X, branch = branch, pst = pst, k = k, phi = phi,
        delta = delta, p_transient = p_transient)
 }
