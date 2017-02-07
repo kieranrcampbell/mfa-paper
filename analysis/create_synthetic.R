@@ -15,7 +15,7 @@ transient <- function(t, location = 0.5, scale = 0.01, reverse = FALSE) {
 }
 
 create_synthetic <- function(C = 100, G = 40, p_transient = 0,
-                             zero_negative = FALSE, prop_dropout = 0,
+                             zero_negative = FALSE, model_dropout = FALSE,
                              lambda = 1) {
   
   # C <- 100 # cells
@@ -114,7 +114,7 @@ create_synthetic <- function(C = 100, G = 40, p_transient = 0,
     X[X < 0] <- 0
   }
   
-  if(p_drop > 0) {
+  if(model_dropout && lambda < Inf) {
     drop_probs <- t(apply(X, 1, function(x) exp(-lambda * x)))
     for(g in seq_len(G)) {
       drop <- runif(N) < drop_probs[g, ]

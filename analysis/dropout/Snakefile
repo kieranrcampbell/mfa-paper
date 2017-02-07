@@ -1,0 +1,21 @@
+
+"""
+Effect of dropout on MFA accuracy
+"""
+
+reps = list(range(1,21))
+lambdas = ["0.5", "1", "10", "Inf"]
+
+output_files = expand("data/dropout_test_{lambda}_{rep}.Rdata",
+    lambda = lambdas, rep = reps)
+
+rule all:
+    input:
+        output_files
+
+
+rule quantify_dropout:
+    output:
+        "data/dropout_test_{lambda}_{rep}.Rdata"
+    shell:
+        "Rscript --vanilla mfa_dropout_test.R {lambda} {rep}"
