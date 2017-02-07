@@ -14,7 +14,9 @@ transient <- function(t, location = 0.5, scale = 0.01, reverse = FALSE) {
   return(y)
 }
 
-create_synthetic <- function(C = 100, G = 40, p_transient = 0) {
+create_synthetic <- function(C = 100, G = 40, p_transient = 0,
+                             zero_negative = FALSE, prop_dropout = 0,
+                             lambda = 1) {
   
   # C <- 100 # cells
   # G <- 40 # genes
@@ -106,6 +108,18 @@ create_synthetic <- function(C = 100, G = 40, p_transient = 0) {
       y[cells_on_constant_branch] <- X[g, cells_on_constant_branch]
       return( y )
     }))
+  }
+  
+  if(zero_negative) {
+    X[X < 0] <- 0
+  }
+  
+  if(p_drop > 0) {
+    drop_probs <- t(apply(X, 1, function(x) exp(-lambda * x)))
+    for(g in seq_len(G)) {
+      drop <- runif(N) < drop_probs[g, ]
+      X[g,drop] <- 0
+    }
   }
   
   list(X = X, branch = branch, pst = pst, k = k, phi = phi,

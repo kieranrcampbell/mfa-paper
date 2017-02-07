@@ -1,7 +1,7 @@
 ---
 title: "Myleoid Erthrocyte Analysis"
 author: "Kieran Campbell"
-date: "26 September 2016"
+date: "30 January 2017"
 output:
   html_document:
     highlight: tango
@@ -16,11 +16,11 @@ knitr::opts_chunk$set(echo = TRUE, cache = TRUE, fig.width = 7, fig.height = 4,
 library(scater)
 library(tidyverse)
 
-# library(monocle)
-# library(dpt)
-# library(GGally)
-
-# library(devtools)
+library(monocle)
+library(dpt)
+library(GGally)
+library(viridis)
+library(devtools)
 # 
 devtools::load_all("~/oxford/mfa/mfa")
 
@@ -70,12 +70,14 @@ plotPCA(sce_subset, colour_by = "Trajectory")
 
 
 ```{r mfa}
+set.seed(123L)
 y_scaled <- scale(y)
-m <- mfa(y_scaled, iter = 20000, thin = 5, pc_initialise = 2, 
-         b = 2, tau_eta = 1, tau_theta = 1, tau_c = 0.1, prop_collapse = 0,
-         alpha = 2, beta = 1, alpha_chi = 1000, beta_chi = 1)
+m <- mfa(y_scaled, iter = 40000, thin = 20, pc_initialise = 2, 
+         b = 2, 
+        tau_c = 0.1, alpha = 2, beta = 1,
+        alpha_chi = 1000, beta_chi = 1)
 
- print( m )
+print( m )
 ```
 
 MCMC diagnostics:
@@ -136,35 +138,185 @@ ggplot(gex_tidy, aes(x = pseudotime, y = gene,
 ```
 
 
+
+## Plots for figure:
+
+```{r plots-for-figure}
+library(cowplot)
+pd_df <- select(pData(sce_subset), tSNE1, tSNE2, pseudotime, branch) 
+
+pst_plot <- ggplot(pd_df, aes(x = tSNE1, y = tSNE2, color = pseudotime)) +
+  geom_point(alpha = 0.7) + scale_color_viridis(name = expression(paste("MAP ", t)))
+
+branch_plot <- ggplot(pd_df, aes(x = tSNE1, y = tSNE2, color = branch)) +
+  geom_point(alpha = 0.7) + 
+  scale_color_brewer(palette = "Set1", name = expression(paste("MAP ", gamma)))
+
+```
+
+```{r plots-for-figure2}
+chimap <- colMeans(m$traces$chi_trace)
+chi_df <- data_frame(gene = featureNames(sce_subset), chi_inv = 1 / chimap)
+# top <- dplyr::arrange(chi_df, desc(chi_inv)) %>% extract2("gene") %>% head(n = 20)
+# bottom <- dplyr::arrange(chi_df, chi_inv) %>% extract2("gene") %>% head(n = 20)
+
+chi_df_reduced <- dplyr::arrange(chi_df, desc(chi_inv))
+chi_df_reduced$gene <- factor(chi_df_reduced$gene, levels = chi_df_reduced$gene)
+
+breaks <- quantile(chi_df_reduced$chi_inv, probs = c(0.2, 0.8))
+names(breaks) <- NULL
+breaks <- round(breaks, 4)
+
+chi_plot <- ggplot(chi_df_reduced, aes(x = gene, y = chi_inv)) +
+  geom_bar(stat = 'identity') + 
+  coord_flip(ylim = c(min(chi_df_reduced$chi_inv), max(chi_df_reduced$chi_inv))) +
+  theme(axis.title.y = element_blank(),
+        axis.text.y = element_text(size = 9)) +
+  ylab(expression(paste("[MAP ", chi[g] ,"]" ^ "-1")))+
+  scale_y_continuous(breaks = breaks)
+
+genes <- c("CD34", "CD235ab", "CD64")
+gex <- t(exprs(sce_subset)[genes, ])
+
+pd_tidy <- as_data_frame(cbind(pd_df, gex)) %>% 
+  gather(gene, Expression, -(tSNE1:branch))
+
+plot_gene <- function(g) {
+  plt <- ggplot(dplyr::filter(pd_tidy, gene == g), aes(x = tSNE1, y = tSNE2, color = log(Expression + 1))) +
+  geom_point() + scale_color_viridis(name = g) 
+  if(g == "CD235ab") {
+    plt <- plt + theme(
+      legend.title = element_text(size = 9)
+    )
+  }
+  return(plt)
+}
+
+expression_plots <- lapply(genes, plot_gene)
+
+ex_plot <- plot_grid(plotlist = expression_plots, ncol = 1)
+```
+
+Combine into upper grid:
+
+```{r upper-grid}
+upper_grid <- plot_grid(
+  plot_grid(pst_plot, branch_plot, ncol = 1, labels = c("A", "B")),
+  chi_plot,
+  ex_plot,
+  ncol = 3, labels = c("", "C", "D"), rel_widths = c(3,2.4,2.4)
+)
+```
+
 # Comparison to alternative pseudotime algorithms
 
-### Monocle
+
+## plot PCA and find root cell
+
+```{r plot-pca}
+sce_subset <- plotPCA(sce_subset, return_SCESet = TRUE, colour_by = "Trajectory")
+root_cell <- which.min(redDim(sce_subset)[,2])
+pc2 <- redDim(sce_subset)[,2]
+```
+
 
 ```{r fit-monocle}
-root_cell <- which.min(redDim(sce_subset)[,2])
-
 cds <- toCellDataSet(sce_subset)
-cds <- reduceDimension(cds)
+cds <- reduceDimension(cds, norm_method = "none")
 cds <- orderCells(cds, num_paths = 2)
-cds <- orderCells(cds, num_paths = 2, root_state = 18)
+cds <- orderCells(cds, num_paths = 2, root_state = cds$State[root_cell])
 
 plot_cell_trajectory(cds, color_by = "Pseudotime")
-plot_cell_trajectory(cds, color_by = "State")
 ```
 
 ## DPT
 
 ```{r dpt}
-gene_sds <- matrixStats::rowSds(exprs(sce_subset))
-gene_collapse_sd <- 1e-6 * gene_sds
-new_exprs <- apply(exprs(sce_subset), 2, function(x) rnorm(length(x), x, gene_collapse_sd))
+# gene_sds <- matrixStats::rowSds(exprs(s))
+# gene_collapse_sd <- 1e-6 * gene_sds
+# new_exprs <- apply(exprs(s), 2, function(x) rnorm(length(x), x, gene_collapse_sd))
 
-ts <- Transitions(t(new_exprs))
+ts <- Transitions(t(exprs(sce_subset)))
 pt <- dpt(ts, branching = TRUE, root = root_cell) 
 ```
 
 
 
+## Compare all
+
+```{r compare-all}
+df_compare <- data_frame(Wishbone = sce_subset$Trajectory,
+                         mfa = sce_subset$pseudotime,
+                         Monocle = cds$Pseudotime,
+                         DPT = pt$DPT,
+                         PC2 = pc2)
+
+df_tidy <- gather(df_compare, algorithm, value, -mfa) 
+df_tidy$algorithm <- factor(df_tidy$algorithm, 
+                            levels = c("PC2", "Wishbone", "Monocle", "DPT"))
+
+pst_compare_plot <- ggplot(df_tidy, aes(x = mfa, y = value)) + 
+  facet_wrap(~ algorithm, scales = "free_y", nrow = 1) +
+  geom_point(alpha = 0.6) +
+  xlab("MFA pseudotime") + ylab("Algorithm pseudotime")
+```
+
+
+Comparison of branch allocations:
+
+```{r compare_branch_allocations}
+
+## We're going to need to reduce the frequency of Monocle branches
+bt <- table(cds$State)
+
+infrequent_states <- bt < quantile(bt, probs = 0.7)
+freq_stat <- plyr::mapvalues(cds$State, 
+                             from = which(infrequent_states),
+                             to = rep("Other", length(which(infrequent_states))))
+
+branch_df <- data_frame(Wishbone = factor(sce_subset$Branch),
+                        Monocle = factor(freq_stat), #cds$State,
+                        DPT = pt$Branch,
+                        tSNE1 = sce_subset$tSNE1,
+                        tSNE2 = sce_subset$tSNE2)
+
+algorithms <- c("Wishbone", "Monocle", "DPT")
+
+plot_bif <- function(alg) {
+  plt <- ggplot(branch_df, aes_string(x = "tSNE1", y = "tSNE2", color = alg)) + 
+    geom_point() + 
+    cowplot::theme_cowplot() +
+    theme(legend.title = element_text(size = 10, face = "bold"))
+  if(alg == "Monocle") {
+    plt <- plt + scale_color_discrete(name = paste(alg,"\nbranch"))
+  } else {
+    plt <- plt + scale_color_brewer(palette = "Set1", name = paste(alg,"\nbranch"))
+  }
+  return(plt)
+}
+
+bif_plots <- lapply(algorithms, plot_bif)
+
+bottom_grid <- cowplot::plot_grid(plotlist = bif_plots, nrow = 1,
+                   rel_widths = c(3,3,3.7))
+
+```
+
+Put it together for overall plot:
+
+```{r overall-plot}
+
+full_plot <- plot_grid(
+  upper_grid,
+  pst_compare_plot,
+  bottom_grid,
+  rel_heights = c(2.7,1,1), labels = c("", "E", "F"),
+  ncol = 1
+)
+
+ggsave("../figs/masscyto_fig.png", full_plot, width = 10, height = 12)
+
+```
 
 ## Shuffling of trunk
 
