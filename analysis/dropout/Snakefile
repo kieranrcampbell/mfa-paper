@@ -3,8 +3,8 @@
 Effect of dropout on MFA accuracy
 """
 
-reps = list(range(1,21))
-lls = ["0.5", "1", "10", "Inf"]
+reps = list(range(1,51))
+lls = ["0.01", "0.05", "0.1", "1", "10", "Inf"]
 
 output_files = expand("data/dropout_test_{ll}_{rep}.csv",ll = lls, rep = reps)
 
