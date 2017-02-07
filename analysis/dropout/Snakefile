@@ -4,10 +4,9 @@ Effect of dropout on MFA accuracy
 """
 
 reps = list(range(1,21))
-lambdas = ["0.5", "1", "10", "Inf"]
+lls = ["0.5", "1", "10", "Inf"]
 
-output_files = expand("data/dropout_test_{lambda}_{rep}.Rdata",
-    lambda = lambdas, rep = reps)
+output_files = expand("data/dropout_test_{ll}_{rep}.csv",ll = lls, rep = reps)
 
 rule all:
     input:
@@ -16,6 +15,6 @@ rule all:
 
 rule quantify_dropout:
     output:
-        "data/dropout_test_{lambda}_{rep}.Rdata"
+        "data/dropout_test_{ll}_{rep}.csv"
     shell:
-        "Rscript --vanilla mfa_dropout_test.R {lambda} {rep}"
+        "Rscript --vanilla mfa_dropout_test.R {wildcards.ll} {wildcards.rep}"

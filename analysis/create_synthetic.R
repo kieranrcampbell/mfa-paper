@@ -117,7 +117,7 @@ create_synthetic <- function(C = 100, G = 40, p_transient = 0,
   if(model_dropout && lambda < Inf) {
     drop_probs <- t(apply(X, 1, function(x) exp(-lambda * x)))
     for(g in seq_len(G)) {
-      drop <- runif(N) < drop_probs[g, ]
+      drop <- runif(C) < drop_probs[g, ]
       X[g,drop] <- 0
     }
   }

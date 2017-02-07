@@ -13,8 +13,10 @@ args <- commandArgs(trailingOnly = TRUE)
 lambda <- as.numeric(args[1])
 rep <- as.numeric(args[2])
 
-output_filename <- paste0("dropout_test_", lambda, "_", rep, ".Rdata")
+output_filename <- paste0("dropout_test_", lambda, "_", rep, ".csv")
 output_file <- file.path("data", output_filename)
+
+message(paste("Saving results to", output_file))
 
 C <- 200
 G <- 50
@@ -31,15 +33,22 @@ pc_initialise <- which.max(abs(pc_cors))
 m <- NULL
 
 
-m <- mfa(t(X), iter = 20000, thin = 10, 
-             zero_inflation = TRUE, lambda = lambda,
+m <- mfa(t(X), iter = 60000, thin = 30, 
+             zero_inflation = FALSE,
              pc_initialise = pc_initialise,
              b = 2, tau_eta = 1e-5, tau_c = 0.1, tau_theta = 1e-2)
 
-mzi <- mfa(t(X), iter = 20000, thin = 10, 
+mzi <- mfa(t(X), iter = 60000, thin = 30, 
            zero_inflation = TRUE, lambda = lambda,
            pc_initialise = pc_initialise,
            b = 2, tau_eta = 1e-5, tau_c = 0.1, tau_theta = 1e-2)
 
+ms <- summary(m)
+mzis <- summary(mzi)
 
-save(m, mzi, synth, lambda, model_dropout, rep, file = output_file)
+pst_cor <- cor(pst, ms$pseudotime)
+pst_cor_zi <- cor(pst, mzis$pseudotime)
+
+results <- data_frame(lambda, rep, pst_cor, pst_cor_zi)
+
+write_csv(results, output_file)
