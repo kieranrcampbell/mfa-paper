@@ -11,6 +11,7 @@ source("../create_synthetic.R")
 args <- commandArgs(trailingOnly = TRUE)
 
 lambda <- as.numeric(args[1])
+
 rep <- as.numeric(args[2])
 
 output_filename <- paste0("dropout_test_", lambda, "_", rep, ".csv")
@@ -45,7 +46,7 @@ if(any(X != 0)) {
              b = 2, tau_eta = 1e-5, tau_c = 0.1, tau_theta = 1e-2)
 
 	     mzi <- mfa(t(X), iter = 60000, thin = 30, 
-           zero_inflation = TRUE, # lambda = lambda,
+           zero_inflation = TRUE, 
            pc_initialise = pc_initialise,
            b = 2, tau_eta = 1e-5, tau_c = 0.1, tau_theta = 1e-2)
 
