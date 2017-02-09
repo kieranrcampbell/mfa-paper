@@ -19,6 +19,7 @@ library(scater)
 library(viridis)
 library(magrittr)
 library(cowplot)
+library(RColorBrewer)
 
 library(monocle)
 library(dpt)
@@ -29,10 +30,25 @@ devtools::load_all("~/oxford/mfa/mfa")
 source("create_synthetic.R")
 ```
 
+Bit of ggtheming:
+
+```{r ggtheming}
+theme_paper <- theme(
+  axis.title = element_text(size = 10),
+  axis.text = element_text(size = 9),
+  legend.title = element_text(size = 10),
+  legend.text = element_text(size = 9)
+)
+
+```
+
 Create synthetic dataset:
 
 ```{r create-synthetic}
-synth <- create_synthetic(C = 100, G = 50, p_transient = 0.5)
+set.seed(321)
+G <- 60
+C <- 300
+synth <- create_synthetic(C = C, G = G)
 
 X <- synth$X; pst <- synth$pst; branch <- synth$branch
 
@@ -42,11 +58,12 @@ pca_tidy <- as_data_frame(pca$x[,1:2]) %>%
   dplyr::mutate(pst, branch = factor(branch))
 
 ggplot(pca_tidy, aes(x = PC1, y = PC2, colour = pst)) +
-  geom_point() + scale_color_viridis()
+  geom_point() + scale_color_viridis() + theme_paper
 
 ggplot(pca_tidy, aes(x = PC1, y = PC2, fill = branch)) +
   geom_point(shape = 21, alpha = 0.5) + 
-  scale_fill_brewer(palette = "Set1")
+  scale_fill_brewer(palette = "Set1") + theme_paper
+
 ```
 
 
@@ -54,9 +71,7 @@ MFA it:
 
 ```{r mfa}
 y <- scale(t(X))
-m <- mfa(y, iter = 1e5, b = 2, thin = 50, pc_initialise = 1, 
-         alpha = 1e-1, beta = 1e-1,
-         alpha_chi = 1e-2, beta_chi = 1e-2)
+m <- mfa(y, iter = 1e5, b = 2, thin = 50, pc_initialise = 1)
 plot_mfa_trace(m)
 plot_mfa_autocorr(m)
 ms <- summary(m)
@@ -70,17 +85,50 @@ pca_tidy$mfa_branch <- ms$branch
 pca_tidy$branch_certainty <- ms$branch_certainty
 
 ggplot(pca_tidy, aes(x = PC1, y = PC2, colour = mfa_pseudotime)) +
-  geom_point() + scale_color_viridis(name = "MAP t")
-pseudotime_plot <- last_plot()
+  geom_point() + scale_color_viridis(name = "MAP t") + theme_paper
+pseudotime_plot <- last_plot() 
 
 ggplot(pca_tidy, aes(x = PC1, y = PC2, fill = mfa_branch)) +
   geom_point(shape = 21, alpha = 0.5) + 
-  scale_fill_brewer(palette = "Set1", name = expression(paste("MAP ", gamma)))
+  scale_fill_brewer(palette = "Set1", name = expression(paste("MAP ", gamma))) + theme_paper
 branch_plot <- last_plot()
 
+after_halfway <- pst > 0.5
+
+branch <- branch + 1 # make life slightly easier
+tbl <- table(branch[after_halfway], ms$branch[after_halfway])
+diag_sum <- sum(diag(tbl))
+off_diag_sum <- sum(tbl[1,2], tbl[2,1])
+
+if(off_diag_sum > diag_sum) { # need to swap one of the labels
+ branch <- branch %% 2 + 1
+}
+
+branch_correct <- as.character(branch == ms$branch)
+branch_correct[!after_halfway] <- "NA"
+branch_correct <- factor(branch_correct, levels = c("TRUE", "FALSE", "NA"))
+branch_correct <- plyr::mapvalues(branch_correct,
+                                  from = c("TRUE", "FALSE", "NA"),
+                                  to = c("True", "False", "NA"))
+
+pca_tidy$branch_correct <- branch_correct
+
+cols <- brewer.pal(3, "Set1")
+kcols <- c(cols[3], cols[1], "#D3D3D3")
+
+ggplot(pca_tidy, aes(x = PC1, y = PC2, fill = branch_correct)) +
+  geom_point(shape = 21, alpha = 0.5) + 
+  scale_fill_manual(values = kcols, name = "Branch\ncorrect", drop = F) + theme_paper
+branch_correct_plot <- last_plot()
+
+```
+
+
+
+```{r chi-plot}
 chimap <- colMeans(m$traces$chi_trace)
-chi_df <- data_frame(gene = paste0("gene", 1:50), chi_inv = 1 / chimap,
-                     branches = rep(c(F,T), each = 50 / 2))
+chi_df <- data_frame(gene = paste0("gene", 1:G), chi_inv = 1 / chimap,
+                     branches = rep(c(F,T), each = G / 2))
 
 gene_order <- dplyr::arrange(chi_df, chi_inv) %>% magrittr::extract2("gene")
 chi_df$gene <- factor(chi_df$gene, levels = gene_order)
@@ -92,13 +140,14 @@ chi_plot <- ggplot(chi_df, aes(x = gene, y = chi_inv, fill = branches)) +
         axis.ticks.y = element_blank()) +
   ylab(expression(paste("[MAP ", chi[g] ,"]" ^ "-1"))) +
   scale_fill_brewer(palette = "Set1", name = "Gene\nbranches") +
-  xlab("Gene")
+  xlab("Gene") + theme_paper
 
 ```
 
 
 ```{r upper-grid-plot}
-plot_grid(pseudotime_plot, branch_plot, chi_plot, nrow = 1, labels = "AUTO")
+plot_grid(pseudotime_plot, branch_plot, labels = "AUTO", label_size = 11)
+top_grid <- last_plot()
 ```
 
 Now compare to the different algorithms:
@@ -121,7 +170,7 @@ pt <- dpt(ts, branching = TRUE, root = root_cell)
 
 
 ```{r compare-all}
-df_compare <- data_frame(mfa = ms$pseudotime,
+df_compare <- data_frame(MFA = ms$pseudotime,
                          Monocle = cds$Pseudotime,
                          DPT = pt$DPT,
                          PC1 = pc1,
@@ -129,14 +178,70 @@ df_compare <- data_frame(mfa = ms$pseudotime,
 
 df_tidy <- gather(df_compare, algorithm, value, -true) 
 df_tidy$algorithm <- factor(df_tidy$algorithm, 
-                            levels = c("mfa", "PC1", "Monocle", "DPT"))
+                            levels = c("MFA", "PC1", "Monocle", "DPT"))
+
+print(group_by(df_tidy, algorithm) %>% 
+  summarise(correlation = cor(true, value)))
 
 ggplot(df_tidy, aes(x = true, y = value)) + 
   facet_wrap(~ algorithm, scales = "free_y", nrow = 1) +
   geom_point(alpha = 0.6) +
-  xlab("True pseudotime") + ylab("Algorithm pseudotime")
+  xlab("True pseudotime") + ylab("Algorithm pseudotime") + theme_paper +
+  theme(strip.text = element_text(size = 10))
 
 pst_compare_plot <- last_plot()
+```
+
+Pinched from transient:
+
+
+
+```{r analyse-analysis-results}
+data_dir <- "simulations/data"
+csv_files <- dir(data_dir, full.names = TRUE)
+
+dfs <- lapply(csv_files, read_csv)
+df_full <- bind_rows(dfs)
+
+df_reduced <- group_by(df_full, p_transient, rep) %>% 
+  summarise(
+    Monocle = abs(cor(monocle, true_pst)),
+    DPT = abs(cor(dpt, true_pst)),
+    MFA = abs(cor(mfa, true_pst))
+  )
+
+df_reduced <- gather(df_reduced, algorithm, correlation,
+                     -p_transient, -rep)
+df_reduced$p_transient <- factor(df_reduced$p_transient)
+df_reduced$algorithm[df_reduced$algorithm == "Monocle"] <- "Monocle 2"
+```
+
+
+and plot results:
+
+```{r plot-results}
+ggplot(df_reduced, aes(x = p_transient, 
+                       y = correlation, fill = algorithm)) +
+  geom_boxplot(alpha = 0.7) +
+  xlab("Proportion of genes transient") +
+  ylab("Correlation to true pseudotime") +
+  scale_fill_brewer(palette = "Set1", name = "Algorithm")  + theme_paper
+
+transient_plot <- last_plot()
+
+# bottom_grid <- plot_grid(chi_plot, transient_plot, nrow = 1, labels = c("D", "E"), label_size = 11)
+```
+
+And plot everything:
+
+```{r plot-everything}
+second_grid <- plot_grid(branch_correct_plot, chi_plot, nrow = 1,
+                         labels = c("C", "D"), label_size = 11)
+bottom_grid <- plot_grid(NULL, transient_plot, NULL, rel_widths = c(1,4,1), 
+                         labels = c("", "F", ""), label_size = 11, nrow = 1)
+plot_grid(top_grid, second_grid, pst_compare_plot, 
+          bottom_grid, ncol = 1, labels = c("", "", "E", ""), label_size = 11)
+ggsave("../figs/fig1_toy.png", width = 8, height = 10)
 ```
 
 

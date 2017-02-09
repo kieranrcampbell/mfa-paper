@@ -15,13 +15,8 @@ transient <- function(t, location = 0.5, scale = 0.01, reverse = FALSE) {
 }
 
 create_synthetic <- function(C = 100, G = 40, p_transient = 0,
-                             zero_negative = FALSE, model_dropout = FALSE,
+                             zero_negative = TRUE, model_dropout = FALSE,
                              lambda = 1) {
-  
-  # C <- 100 # cells
-  # G <- 40 # genes
-  
-  # p_transient <- 1 # proportion of gene behaviour that should be transient
   
   branch <- rbinom(C, 1, 0.5)
   
@@ -44,7 +39,7 @@ create_synthetic <- function(C = 100, G = 40, p_transient = 0,
   inds2 <- (G/2 + 1):G
   
   # For non-bifurcating genes, set behaviour identical across the two branches
-  k[, 2] <- k[inds, 1]
+  k[inds, 2] <- k[inds, 1]
   
   k[inds2, ] <- t(apply(k[inds2, ], 1, function(r) r * sample(c(0, 1))))
   
@@ -121,16 +116,6 @@ create_synthetic <- function(C = 100, G = 40, p_transient = 0,
       X[g,drop] <- 0
     }
   }
-  
-  # row_vars <- matrixStats::rowVars(X)
-  # if(any(row_vars == 0)) {
-  #   zero_genes <- which(row_vars == 0)
-  #   for(g in zero_genes) {
-  #     N_cells <- sample(seq_len(C / 5), 1) # how many cells to add stochastic expression to
-  #     which_cells <- sample(seq_len(C), N_cells)
-  #     X[g,which_cells] <- runif(N_cells, 0, 0.5) # add small noise
-  #   }
-  # }
   
   list(X = X, branch = branch, pst = pst, k = k, phi = phi,
        delta = delta, p_transient = p_transient)

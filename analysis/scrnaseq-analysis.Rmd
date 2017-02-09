@@ -79,7 +79,7 @@ to_use <- vars > 5
 ```{r create-gex-matrix}
 set.seed(123L)
 # to_sample <- seq_len(ncol(sce)) 
-to_sample <- sample(seq_len(ncol(sc)), 500)
+to_sample <- seq_len(ncol(sc)) # sample(seq_len(ncol(sc)), 500)
 s <- sc[to_use, to_sample]
 X <- t(exprs(s))
 rm(sc)
@@ -207,18 +207,25 @@ upper_grid <- plot_grid(
 
 ## plot PCA and find root cell
 
-```{r plot-pca}
+```{r plot-pca-root}
 s <- plotPCA(s, return_SCESet = TRUE, colour_by = "Trajectory")
-root_cell <- which.max(redDim(s)[,2])
+root_cell <- which.min(redDim(s)[,2])
 pc2 <- redDim(s)[,2]
 ```
 
 
 ```{r fit-monocle}
-cds <- toCellDataSet(s)
+to_sample_for_monocle <- sample(1:ncol(s), 1000, replace = FALSE)
+monocle_pseudotime <- monocle_branch <- rep(NA, ncol(s))
+monocle_root_cell <- which.min(s$Trajectory[to_sample_for_monocle])
+
+cds <- toCellDataSet(s[, to_sample_for_monocle])
 cds <- reduceDimension(cds, norm_method = "none")
 cds <- orderCells(cds, num_paths = 2)
-cds <- orderCells(cds, num_paths = 2, root_state = cds$State[root_cell])
+# cds <- orderCells(cds, num_paths = 2, root_state = cds$State[monocle_root_cell])
+
+monocle_pseudotime[to_sample_for_monocle] <- cds$Pseudotime
+monocle_branch[to_sample_for_monocle] <- cds$State
 
 plot_cell_trajectory(cds, color_by = "Pseudotime")
 ```
@@ -232,6 +239,7 @@ plot_cell_trajectory(cds, color_by = "Pseudotime")
 
 ts <- Transitions(t(exprs(s)))
 pt <- dpt(ts, branching = TRUE, root = root_cell) 
+
 ```
 
 
@@ -241,7 +249,7 @@ pt <- dpt(ts, branching = TRUE, root = root_cell)
 ```{r compare-all}
 df_compare <- data_frame(Wishbone = s$Trajectory,
                          mfa = s$pseudotime,
-                         Monocle = cds$Pseudotime,
+                         Monocle = monocle_pseudotime,
                          DPT = pt$DPT,
                          PC2 = pc2)
 
@@ -253,6 +261,13 @@ pst_compare_plot <- ggplot(df_tidy, aes(x = mfa, y = value)) +
   facet_wrap(~ algorithm, scales = "free_y", nrow = 1) +
   geom_point(alpha = 0.6) +
   xlab("MFA pseudotime") + ylab("Algorithm pseudotime")
+
+```
+
+Print correlations:
+
+```{r print-cor}
+cor(df_compare, use = 'complete')
 ```
 
 
@@ -260,7 +275,7 @@ Comparison of branch allocations:
 
 ```{r compare_branch_allocations}
 branch_df <- data_frame(Wishbone = factor(s$Branch),
-                        Monocle = cds$State,
+                        Monocle = factor(monocle_branch),
                         DPT = pt$Branch,
                         tSNE1 = s$tSNE1,
                         tSNE2 = s$tSNE2)
@@ -279,7 +294,6 @@ bif_plots <- lapply(algorithms, plot_bif)
 
 bottom_grid <- cowplot::plot_grid(plotlist = bif_plots, nrow = 1,
                    rel_widths = c(3,3,3.7))
-
 ```
 
 Put it together for overall plot:
@@ -295,59 +309,5 @@ plot_grid(
 )
 
 ggsave("../figs/scrnaseq_fig.png", width = 10, height = 12)
-
-```
-
-
-## Testing with larger number of components
-
-```{r larger-components}
-set.seed(123L)
-
-mrnashrink <- mfa(scale(X), iter = 40000, thin = 20, pc_initialise = 2, 
-         b = 5, tau_eta = 1, tau_theta = 1, prop_collapse = 0,
-         alpha = 1, beta = 1, tau_c = 0.1, alpha_chi = 1000, beta_chi = 1, 
-         w_alpha = 100)
-
-mfa_summary <- summary(mrnashrink)
-print(mfa_summary)
-
-s$shrink_branch <- mfa_summary$branch
-s$shrink_pst <- mfa_summary$pseudotime
-
-plotPhenoData(s, aes(x = tSNE1, y = tSNE2, color = shrink_branch))
-plotPhenoData(s, aes(x = tSNE1, y = tSNE2, color = shrink_pst))
-
-```
-
-
-## Shuffling of trunk
-
-```{r shuffle}
-
-sce_shuffle <- sc
-
-exprs_branch_1 <- exprs(sce_shuffle[, sce_shuffle$Branch == 1])
-
-exprs_branch_1_shuffled <- apply(exprs_branch_1, 1, 
-                                 function(x) x[sample(seq_along(x))])
-
-exprs(sce_shuffle)[, sce_shuffle$Branch == 1] <- 
-  t(exprs_branch_1_shuffled)
-
-message(varLabels(sce_shuffle))
-
-cowplot::plot_grid(
-  plotPCA(sce, colour_by = "Trajectory"),
-  plotPCA(sce_shuffle, colour_by = "Trajectory"),
-  labels = c("Original", "Branch 1 shuffled")
-  )
-
-# pct_dropout <- colMeans(exprs(sce) == 0) * 100
-# qplot(pct_dropout) + xlab("% dropout")
-
-plotTSNE(sce_shuffle[,sample(seq_len(ncol(sce_shuffle)), 800)], colour_by = "Trajectory", perplexity = 10)
-
-plotTSNE(sc[,sample(seq_len(ncol(sc)), 800)], colour_by = "Trajectory", perplexity = 10)
 ```
 

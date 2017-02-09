@@ -1,0 +1,113 @@
+---
+title: "Supplementary figures"
+author: "Kieran Campbell"
+date: "January 2017"
+output:
+  html_document:
+    highlight: tango
+    number_sections: yes
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE, fig.width = 7, fig.height = 4,
+                      warning = FALSE, message = FALSE)
+
+
+library(tidyverse)
+library(cowplot)
+
+devtools::load_all("~/oxford/mfa/mfa")
+
+theme_paper <- theme(
+  axis.title = element_text(size = 10),
+  axis.text = element_text(size = 9),
+  legend.title = element_text(size = 10),
+  legend.text = element_text(size = 9)
+)
+```
+
+
+Read in dropout stuff:
+
+```{r construct-df}
+files <- dir("dropout/data", full.names = TRUE)
+dfs <- lapply(files, read_csv)
+
+df <- bind_rows(dfs)
+
+df$pst_cor <- abs(df$pst_cor)
+df$pst_cor_zi <- abs(df$pst_cor_zi)
+
+names(df)[3:4] <- c("Normal", "Zero-inflated")
+
+df <- gather(df, algorithm, correlation, -lambda, -rep, -pdrop)
+df$lambda <- factor(as.character(df$lambda))
+```
+
+Make plots:
+
+```{r make-plots}
+ggplot(df, aes(x = lambda, y = correlation, fill = algorithm)) + geom_boxplot() +
+  xlab(expression(lambda)) + ylab("Correlation to true pseudotime") +
+  theme(legend.position = "top",
+        legend.title = element_blank()) +
+  scale_fill_brewer(palette = "Set1", name = "Algorithm") + theme_paper
+
+cor_plot <- last_plot()
+  
+
+ggplot(df, aes(x = lambda, y = 100 * pdrop)) + geom_boxplot() +
+  xlab(expression(lambda)) + ylab("% zero expression") + theme_paper
+
+cell_plot <- last_plot()
+
+```
+
+Synthetic figure:
+
+```{r synthetic-figure}
+df_fig <- frame_data(
+  ~pst, ~expression, ~type,
+  0, 0, "True zero",
+  1, 0, "True zero",
+  2, 0, "True zero",
+  3, 1, "Amplified",
+  4, 0, "Dropout",
+  5, 2, "Amplified",
+  6, 0, "Dropout",
+  7, 3, "Amplified",
+  8, 4, "Amplified"
+)
+df_fig$type <- factor(df_fig$type, levels = c("Dropout", "True zero", "Amplified"))
+
+cols <- RColorBrewer::brewer.pal(3, "Set1")
+
+ggplot(df_fig, aes(x = pst, y = expression, color = type)) +
+  geom_point(size = 3) + scale_color_brewer(palette = "Set1") +
+  geom_segment(x = 4, xend = 4, y = 1.5, yend = 0.1, color = 'black',
+               arrow = arrow(length = unit(0.3, "cm"))) +
+  geom_segment(x = 6, xend = 6, y = 2.5, yend = 0.1, color = 'black',
+             arrow = arrow(length = unit(0.3, "cm"))) +
+  theme(legend.position = 'top') +
+  xlab("Pseudotime") + ylab("Expression") + 
+  theme_paper +
+  theme(legend.title = element_blank()) +
+  ylim(c(-0.1, 4.5))
+
+diagram <- last_plot()
+```
+
+
+
+Put them all together:
+
+```{r plot-together}
+top_grid <- plot_grid(diagram, cell_plot, labels = "AUTO", label_size = 11, nrow = 1)
+bottom_grid <- plot_grid(NULL, cor_plot, NULL, labels = c("", "C", ""),
+                         label_size = 11, rel_widths = c(1,6,1), nrow = 1)
+
+plot_grid(top_grid, bottom_grid, ncol = 1, rel_heights = c(3,4))
+ggsave("../figs/dropout.png", width=7,height=6)
+```
+

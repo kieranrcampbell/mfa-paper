@@ -35,7 +35,7 @@ Make some synthetic x and an initial y:
 ```{r synthetic}
 N <- 80
 G <- 8
-b <- B <- 2
+b <- B <- 3
 
 # x <- scale(matrix(sample(0:1, size = N * P, replace = TRUE), ncol = ))
 
@@ -61,11 +61,11 @@ r <- 1
 Sample values:
 
 ```{r init-vals}
-w <- MCMCpack::rdirichlet(1, c(1/B, 1/B))
+w <- MCMCpack::rdirichlet(1, rep(1/B, B))
 
-gamma <- sample(c(1,2), N, prob = w, replace = TRUE)
+gamma <- sample(seq_len(B), N, prob = w, replace = TRUE)
 
-eta <- rnorm(B, 0, 1)
+eta <- rnorm(1)
 theta <- rnorm(G, 0, 1)
 
 ## precision parameters
@@ -111,12 +111,12 @@ lhs <- sum(log_dnorm(kp[,1], nu_k / lam_k, lam_k)) -
 expect_equal(lhs, rhs)
 ```
 
-## k
+## c
 
 ```{r unit-testing-c}
-nu_c <- calculate_nuc(y, pst, k[,1], tau, eta[1], tau_c, gamma == 1)
+nu_c <- calculate_nuc(y, pst, k[,1], tau, eta, tau_c, gamma == 1)
 lam_c <- calculate_lamc(tau, tau_c, sum(gamma == 1))
-
+ 
 cp <- c; cp[1] <- 0
 
 rhs <- posterior(y, cp, k, pst, tau, gamma, theta, eta, chi, w, tau_c, r, alpha, beta,
@@ -171,7 +171,7 @@ expect_equal(lhs, rhs)
 
 ```{r unit-testing-theta}
 ## From R code
-lambda_theta <- 2 * chi + tau_theta
+lambda_theta <- b * chi + tau_theta
 nu_theta <- tau_theta * theta_tilde + chi * rowSums(k)
 nu_theta <- nu_theta / lambda_theta
 
@@ -193,8 +193,8 @@ expect_equal(lhs, rhs)
 
 ```{r unit-testing-eta}
 ## From R code
-lambda_eta <- tau_eta + G * tau_c
-nu_eta <- tau_eta * eta_tilde + tau_c * colSums(c)
+lambda_eta <- tau_eta + G * b * tau_c
+nu_eta <- tau_eta * eta_tilde + tau_c * sum(c)
 nu_eta <- nu_eta / lambda_eta
 
 etap <- eta
@@ -237,48 +237,23 @@ expect_equal(lhs, rhs)
 
 ## Pi
 
-```{r testpi}
-# # Gelman's
-log_sum_exp2 <- function(u, v)  max(u, v) + log(exp(u - max(u, v)) + exp(v - max(u, v)))
-
-## Test something small
-c <- 20; g <- 10
-y2 <- matrix(rnorm(c * g), nrow = c, ncol = g)
-c <- matrix(rnorm(g * 2), ncol = 2)
-k <- matrix(rnorm(g * 2), ncol = 2)
-pst <- rnorm(c)
-tau <- rgamma(g, 2, 1)
-# means <- sapply(1:2, function(b) c[1,b] + k[1, b] * pst)
-
-uprobs <- sapply(1:2, function(br) {
-  sapply(1:20, function(cell) {
-    sum(dnorm(y2[cell, ], c[,br] + k[,br] * pst[cell], 1 / sqrt(tau), log = TRUE)) + log(0.5)
-  })
-})
-
-probs <- t(apply(uprobs, 1, function(x) {
-  denom <- log_sum_exp2(x[1], x[2])
-  exp(x - denom)
-}))
-
-probs_pi <- calculate_pi(y2, c, k, pst, tau, eta, tau_c, FALSE, log(c(0.5, 0.5)))
-```
 
 ```{r unit-testing-pi}
-yp <- y; yp[1] <- 0
 pi <- calculate_pi(y, c, k, pst, tau, eta, tau_c, FALSE, log(w), log_result = TRUE)
-pip <- calculate_pi(yp, c, k, pst, tau, eta, tau_c, FALSE, log(w), log_result = TRUE)
 
-lhs <- log(pip[1, gamma[1]]) - log(pi[1, gamma[1]])
+gammap <- gamma
+gammap[1] <- 2
 
-rhs <- posterior(yp[1, ,drop=F], c, k, pst[1], tau, gamma[1], 
+lhs <- pi[1, gammap[1]] - pi[1, gamma[1]]
+
+rhs <- posterior(y, c, k, pst, tau, gammap, 
                  theta, eta, chi, w, tau_c, r, alpha, beta,
                       theta_tilde, eta_tilde, tau_theta, tau_eta, alpha_chi, beta_chi) -
-        posterior(y[1,, drop=F], c, k, pst[1], tau, gamma[1], 
-                  theta, eta, chi, w, tau_c, r, alpha, beta,
-                      theta_tilde, eta_tilde, tau_theta, tau_eta, alpha_chi, beta_chi)
+        posterior(y, c, k, pst, tau, gamma, 
+                 theta, eta, chi, w, tau_c, r, alpha, beta,
+                      theta_tilde, eta_tilde, tau_theta, tau_eta, alpha_chi, beta_chi) 
 
-
+expect_equal(lhs, rhs)
 ```
 
 

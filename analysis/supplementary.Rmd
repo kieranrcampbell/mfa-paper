@@ -1,0 +1,456 @@
+---
+title: "Supplementary figures"
+author: "Kieran Campbell"
+date: "January 2017"
+output:
+  html_document:
+    highlight: tango
+    number_sections: yes
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE, fig.width = 7, fig.height = 4,
+                      warning = FALSE, message = FALSE)
+
+
+library(tidyverse)
+library(scater)
+library(viridis)
+library(magrittr)
+library(cowplot)
+
+library(monocle)
+library(dpt)
+library(GGally)
+
+devtools::load_all("~/oxford/mfa/mfa")
+```
+
+
+# Dropout
+
+```{r make-sceset}
+raw <- read_csv("../data/wishbone_mouse_marrow_scrnaseq.csv.gz")
+tpm <- as.matrix(raw[,-1])
+
+nc <- ncol(tpm)
+wishbone_data <- data.frame(tpm[, (nc - 3):nc])
+tpm <- tpm[, 1:(nc - 4)]
+
+cellnames <- raw[[1]]
+pd <- dplyr::mutate(wishbone_data, sample = cellnames)
+
+rownames(pd) <- cellnames
+tpm <- t(tpm)
+colnames(tpm) <- cellnames
+
+sce <- newSCESet(exprsData = tpm, phenoData = new("AnnotatedDataFrame", pd))
+rm(tpm, raw)
+```
+
+```{r dropout-figure}
+
+make_dropout_plot <- function(sce, title) {
+  df <- data_frame(
+    mean_expr = rowMeans(exprs(sce)),
+    prop_drop = rowMeans(exprs(sce) == 0),
+    var_expr = matrixStats::rowVars(exprs(sce)))
+  
+  fit <- nls(prop_drop ~ exp(-lambda * mean_expr), data = df)
+  fit_d <- nls(prop_drop ~ exp(-lambda * mean_expr^2), data = df)
+  
+  f_dropout <- function(x) exp(-coef(fit)[1] * x)
+  fd_dropout <- function(x) exp(-coef(fit)[1] * x^2)
+  
+  
+  df %<>% mutate(exp = f_dropout(mean_expr),
+                 dexp = fd_dropout(mean_expr))
+  
+  dfm <- gather(df, model, value, -mean_expr, -prop_drop, -var_expr)
+  
+  ggplot(arrange(dfm, mean_expr), aes(x = mean_expr, y = prop_drop)) +
+    geom_point(shape = 21, alpha = 0.5) + scale_fill_viridis() +
+    geom_line(aes(y = value, color = model)) + ggtitle(title) +
+    scale_color_brewer(palette = "Set1") +
+    xlab("Mean expression") + ylab("Proportion dropout")
+}
+
+paul_plot <- make_dropout_plot(sce, "Paul")
+
+library(HSMMSingleCell)
+library(monocle)
+data(HSMM)
+hsmm <- HSMM; rm(HSMM)
+exprs(hsmm) <- log2(exprs(hsmm) + 1)
+trapnell_plot <- make_dropout_plot(hsmm, "Trapnell")
+
+cowplot::plot_grid(paul_plot, trapnell_plot)
+
+ggsave("../figs/s1_dropout.png", width=7,height=3)
+```
+
+
+# Effect of dropout on inference
+
+```{r gene-selection}
+means <- rowMeans(exprs(sce))
+vars <- matrixStats::rowVars(exprs(sce))
+to_use <- vars > 5 & rowMeans(exprs(sce) > 0) > 0.2
+set.seed(123L)
+# to_sample <- seq_len(ncol(sce)) 
+to_sample <- sample(seq_len(ncol(sce)), 300)
+s <- sce[to_use, to_sample]
+s <- s[-50,-106]
+y <- t(exprs(s))
+# y <- y[-106,-50]
+```
+
+```{r delete-me}
+m <- mfa(y, iter = 40000, thin = 20, 
+           pc_initialise = 2, 
+         #alpha = 100, beta = 10,
+           #alpha_chi = 2, beta_chi = 1,
+         b = 2)#, tau_eta = 1e-5, tau_c = 1e-5, tau_theta = 1e-2)
+```
+
+Fit MFAs:
+
+```{r fit-mfa}
+set.seed(123L)
+m <- mfa(y, iter = 40000, thin = 20, 
+           zero_inflation = FALSE, scale_input = FALSE,
+           pc_initialise = 2,
+         b = 2, tau_eta = 1e-5, tau_c = 0.1, tau_theta = 1e-2)
+
+ms <- summary(m)
+for(col in names(ms)) pData(s)[[col]] <- ms[[col]]
+
+lambda <- empirical_lambda(y)
+
+set.seed(123L)
+mzi <- mfa(y, iter = 40000, thin = 20, 
+           zero_inflation = TRUE, lambda = lambda,
+           pc_initialise = 2,
+         b = 2, tau_eta = 1e-5, tau_c = 0.1, tau_theta = 1e-2)
+
+ms <- summary(mzi)
+names(ms) <- paste0(names(ms), "_zi")
+for(col in names(ms)) pData(s)[[col]] <- ms[[col]]
+```
+
+Diagnostic plots:
+```{r diagnostic-plots}
+plot_mfa_trace(m)
+plot_mfa_trace(mzi)
+```
+
+Compare pseudotimes:
+
+```{r compare-pseudotimes}
+s$pct_dropout <- colMeans(exprs(s) == 0)
+
+pd <- select(pData(s), pseudotime, pseudotime_zi, pct_dropout)
+
+ggplot(pd, aes(x = pseudotime, y = pseudotime_zi, color = 100 * pct_dropout)) +
+  geom_point() +
+  viridis::scale_color_viridis(name = "% Dropout") +
+  xlab("Pseudotime") + ylab("Pseudotime\n(zero-inflated)") +
+  theme(legend.title = element_text(size = 10))
+
+c_plot <- last_plot()
+
+x <- mzi$traces$x_mean
+imputed_indices <- which(y == 0, arr.ind = TRUE)
+gene_means <- colMeans(y)
+imputed_means <- gene_means[imputed_indices[,2]]
+
+x_imp <- apply(imputed_indices, 1, function(inds) x[inds[1], inds[2]])
+
+ggplot(data_frame(imputed_means, x_imp), aes(x = imputed_means, y = x_imp)) +
+  geom_point(alpha = 0.55) +
+  geom_hline(yintercept = 0, color = 'red', linetype = 2) +
+  xlab("Mean expression") + ylab("Imputed value")
+
+
+i_plot <- last_plot()
+
+plot_grid(c_plot, i_plot, nrow = 1, rel_widths = c(3,2), labels = "AUTO")
+upper_grid <- last_plot()
+```
+
+Extra
+
+```{r extra}
+convert_to_tidy <- function(mzi, x = NULL) {
+  if(is.null(x)) x <- mzi$traces$x_mean
+  gex <- x
+  gene_means <- apply(gex, 2, function(x) max(x))
+  
+  tmap <- colMeans(mzi$traces$pst_trace)
+  cmap <- apply(mzi$traces$c_trace, 3, colMeans)
+  kmap <- apply(mzi$traces$k_trace, 3, colMeans)
+  
+  pe <- lapply(1:2, function(b) {
+    d <-(sapply(seq_along(cmap[,b]), function(g) cmap[g,b] + kmap[g,b] * tmap))
+    d <- as_data_frame(t(apply(d, 1, function(r) r / gene_means)))
+    names(d) <- colnames(y) # paste0("gene_", seq_along(cmap[,b]))
+    d <- dplyr::mutate(d, tmap, predicted_branch = b)
+    gather(d, gene, predicted_expression, -tmap, -predicted_branch)
+    })
+  
+  pe <- bind_rows(pe)
+  
+  
+  gex <- t(apply(gex, 1, function(r) r / gene_means))
+  gex <- as_data_frame(gex)
+  names(gex) <- colnames(y) # paste0("gene_", seq_along(cmap[,1]))
+  br <- round(colMeans(mzi$traces$gamma_trace))
+  gex <- dplyr::mutate(gex, tmap, branch = br)
+  gex <- gather(gex, gene, expression, -tmap, -branch)
+  
+  df <- inner_join(pe, gex, by = c("tmap", "gene"))
+  df$predicted_branch <- factor(df$predicted_branch)
+  df <- dplyr::arrange(df, tmap)
+  df$branch <- factor(df$branch)
+  df
+}
+
+df <- convert_to_tidy(m, y)
+df_zi <- convert_to_tidy(mzi)
+
+df$zero_inflated <- "Zero inflated: FALSE"; df_zi$zero_inflated <- "Zero inflated: TRUE"
+df_all <- bind_rows(df, df_zi)
+
+dplyr::filter(df_all, gene %in% interesting_genes) %>% 
+  ggplot(aes(x = tmap)) + facet_grid(zero_inflated ~ gene, scales = "free_y") +
+  geom_point(aes(y = expression, color = branch), alpha = 0.2) +
+  geom_line(aes(y = predicted_expression, color = predicted_branch)) +
+  scale_color_brewer(palette = "Set1", name = "(Inferred)\nBranch")+
+  ylab("Scaled expression") + xlab("MAP pseudotime") +
+  theme(legend.position = "bottom",
+        strip.text = element_text(size = 9.5))
+
+expression_plot <- last_plot()
+```
+
+
+Fit MFAs:
+
+```{r fit-mfa-fixed}
+set.seed(123L)
+m_fixed <- mfa(y, iter = 40000, thin = 20, 
+           zero_inflation = FALSE, scale_input = FALSE,
+           pc_initialise = 2,
+         b = 2, tau_eta = 1e-5, tau_c = 0.1, tau_theta = 1e-2,
+         clamp_pseudotimes = TRUE)
+
+# ms <- summary(m)
+# for(col in names(ms)) pData(s)[[col]] <- ms[[col]]
+
+lambda <- empirical_lambda(y)
+
+set.seed(123L)
+mzi_fixed <- mfa(y, iter = 40000, thin = 20, 
+           zero_inflation = TRUE, lambda = lambda,
+           pc_initialise = 2,
+         b = 2, tau_eta = 1e-5, tau_c = 0.1, tau_theta = 1e-2,
+         clamp_pseudotimes = TRUE)
+
+# ms <- summary(mzi)
+# names(ms) <- paste0(names(ms), "_zi")
+# for(col in names(ms)) pData(s)[[col]] <- ms[[col]]
+```
+
+
+```{r fixed-expression-plots}
+df <- convert_to_tidy(m_fixed, y)
+df_zi <- convert_to_tidy(mzi_fixed)
+
+df$zero_inflated <- "Zero inflated: FALSE"; df_zi$zero_inflated <- "Zero inflated: TRUE"
+df_all <- bind_rows(df, df_zi)
+
+dplyr::filter(df_all, gene %in% interesting_genes) %>% 
+  ggplot(aes(x = tmap)) + facet_grid(zero_inflated ~ gene, scales = "free_y") +
+  geom_point(aes(y = expression, color = branch), alpha = 0.2) +
+  geom_line(aes(y = predicted_expression, color = predicted_branch)) +
+  scale_color_brewer(palette = "Set1", name = "Inferred\nBranch")+
+  ylab("Scaled expression") + xlab("PC2") +
+  theme(legend.position = "none",
+        strip.text = element_text(size = 9.5, lineheight = 0.1))
+
+expression_plot_fixed <- last_plot()
+```
+
+Expeirment with k plot
+
+```{r k-plot}
+k <- colMeans(m$traces$k_trace[,,1])
+kzi <- colMeans(mzi$traces$k_trace[,,1])
+diff_df <- data_frame(k_diff = abs(k - kzi), gene = colnames(y))
+
+top_genes <- c(
+  dplyr::arrange(diff_df, k_diff) %>% extract2("gene") %>% head(n = 5),
+  dplyr::arrange(diff_df, desc(k_diff)) %>% extract2("gene") %>% head(n = 5)
+)
+diff_df <- dplyr::filter(diff_df, gene %in% top_genes)
+
+ktrace <- m$traces$k_trace[,,1]
+colnames(ktrace) <- colnames(y)
+ktrace_zi <- mzi$traces$k_trace[,,1]
+colnames(ktrace_zi) <- colnames(y)
+
+
+k_tidy <- as_data_frame(ktrace) %>% 
+  dplyr::mutate(iteration = 1:nrow(ktrace)) %>% 
+  gather(gene, value, -iteration) %>% 
+  dplyr::mutate(mode = "Normal")
+
+k_tidy_zi <- as_data_frame(ktrace_zi) %>% 
+  dplyr::mutate(iteration = 1:nrow(ktrace)) %>% 
+  gather(gene, value, -iteration) %>% 
+  dplyr::mutate(mode = "Zero inflated")
+
+kdf <- bind_rows(k_tidy, k_tidy_zi)
+
+kdf <- dplyr::filter(kdf, gene %in% top_genes)
+kdf$gene <- factor(kdf$gene,
+                  levels = dplyr::arrange(diff_df, desc(k_diff)) %>% extract2("gene"))
+
+ggplot(kdf, aes(x = gene, y = value, fill = mode)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.5, position = position_dodge(width = 0.3)) +
+  coord_flip() +
+  scale_fill_brewer(palette = "Set1") +
+  xlab("Gene") + ylab("k") +
+  theme(legend.title = element_blank())
+```
+
+Zero-inflated plot:
+
+```{r zero-inflated-plot}
+plot_grid(
+  upper_grid,
+  expression_plot,
+  expression_plot_fixed,
+  ncol = 1,
+  labels = c("", "C", "D"),
+  rel_heights = c(1,2.3,2)
+)
+ggsave("../figs/dropout_fig.png", width = 10, height = 12)
+```
+
+# Branch shrinkage
+
+```{r branch-shrinkage}
+set.seed(123L)
+m <- mfa(y, iter = 40000, thin = 20,
+           pc_initialise = 2,
+         b = 12, tau_eta = 1e-5, tau_c = 0.1, tau_theta = 1e-2,
+         w_alpha = rep(1e-6, 5))
+
+ms <- summary(m)
+for(col in names(ms)) pData(s)[[col]] <- ms[[col]]
+```
+
+
+# Synthetic data generation
+
+```{r synthetic}
+
+# Multiple trajectory figures ---------------------------------------------
+ksigmoid <- function(t, phi, delta, k) {
+  2 * phi / (1 + exp(-k * (t - delta)))
+}
+
+transient <- function(t, location = 0.5, scale = 0.01, reverse = FALSE) {
+  y <- exp(- 1 / (2 * scale) * (t - location)^2)
+  if(reverse) y <- 1 - y
+  return(2 * y)
+}
+
+plt1 <- ggplot(data.frame(x = c(0, 1)), aes(x = x)) +
+  stat_function(fun = ksigmoid, args = list(phi = 1, delta = 0.75, k = 20), 
+                colour = "darkred", size = 1.5) + 
+  stat_function(fun = ksigmoid, args = list(phi = 0, delta = 0.75, k = 0), 
+                colour = "darkblue", size = 1.5) +
+  xlab("Pseudotime") + ylab("Expression") +
+  theme(axis.title = element_text(size = 10),
+        axis.text = element_text(size = 8))
+
+plt2 <- ggplot(data.frame(x = c(0, 1)), aes(x = x)) +
+  stat_function(fun = ksigmoid, args = list(phi = 1, delta = 0.75, k = -20), 
+                colour = "darkred", size = 1.5) + 
+  stat_function(fun = ksigmoid, args = list(phi = 2, delta = 0.75, k = 0), 
+                colour = "darkblue", size = 1.5) +
+  xlab("Pseudotime") + ylab("Expression")+
+  theme(axis.title = element_text(size = 10),
+        axis.text = element_text(size = 8))
+
+plt3 <- ggplot(data.frame(x = c(0, 1)), aes(x = x)) +
+  stat_function(fun = ksigmoid, args = list(phi = 0, delta = 0.75, k = 0), 
+                colour = "darkred", size = 1.5) + 
+  stat_function(fun = transient, #args = list(phi = 2, delta = 0.75, k = 0), 
+                colour = "darkblue", size = 1.5) +
+  xlab("Pseudotime") + ylab("Expression") +
+  theme(axis.title = element_text(size = 10),
+        axis.text = element_text(size = 8))
+
+plt4 <- ggplot(data.frame(x = c(0, 1)), aes(x = x)) +
+  stat_function(fun = ksigmoid, args = list(phi = 2, delta = 0.75, k = 0), 
+                colour = "darkred", size = 1.5) + 
+  stat_function(fun = transient, args = list(reverse = TRUE), 
+                colour = "darkblue", size = 1.5) +
+  xlab("Pseudotime") + ylab("Expression") +
+  theme(axis.title = element_text(size = 10),
+        axis.text = element_text(size = 8))
+
+plot_grid(plt1, plt2, plt3, plt4, nrow = 1, labels = "AUTO", label_size = 11)
+upper_grid <- last_plot()
+```
+
+And some PCA plotting:
+
+```{r pca-plotting}
+source("create_synthetic.R")
+
+synth <- create_synthetic(C = 200, G = 40)
+X <- synth$X; pst <- synth$pst; branch <- synth$branch
+
+df <- prcomp(t(X))$x[,1:2] %>% 
+  as_data_frame() %>% 
+  dplyr::mutate(pst, branch = factor(branch + 1))
+
+ggplot(df, aes(x = PC1, y = PC2, color = pst)) +
+  geom_point() +
+  scale_color_viridis(name = "Pseudotime") +
+  theme(axis.title = element_text(size = 10),
+        axis.text = element_text(size = 8),
+        legend.title = element_text(size = 10),
+        legend.text = element_text(size = 10))
+pst_plot <- last_plot()
+
+ggplot(df, aes(x = PC1, y = PC2, colour = branch)) +
+  geom_point() +
+  scale_colour_brewer(palette = "Set1", name = "Branch") +
+  theme(axis.title = element_text(size = 10),
+        axis.text = element_text(size = 8),
+        legend.title = element_text(size = 10),
+        legend.text = element_text(size = 10))
+
+branch_plot <- last_plot()
+
+lower_grid <- plot_grid(pst_plot, branch_plot, nrow = 1, labels = c("E", "F"), label_size = 11)
+```
+
+All together:
+
+```{r all-together}
+plot_grid(upper_grid, lower_grid, ncol = 1)
+```
+
+And save:
+
+```{r save-synthetic}
+ggsave("../figs/s2_synthetic.png", width = 10, height = 5)
+
+```
