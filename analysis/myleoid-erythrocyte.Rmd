@@ -21,7 +21,9 @@ library(dpt)
 library(GGally)
 library(viridis)
 library(devtools)
-# 
+library(cowplot)
+
+
 devtools::load_all("~/oxford/mfa/mfa")
 
 ```
@@ -59,7 +61,7 @@ plotPCA(sce, colour_by = "Branch") + scale_fill_brewer(palette = "Set1")
 
 ```{r subset}
 set.seed(123L)
-sce_subset <- sce[, sample(ncol(sce), 4000)]
+sce_subset <- sce[, sample(ncol(sce), 2000)]
 
 y <- t(exprs(sce_subset))
 
@@ -72,10 +74,10 @@ plotPCA(sce_subset, colour_by = "Trajectory")
 ```{r mfa}
 set.seed(123L)
 y_scaled <- scale(y)
-m <- mfa(y_scaled, iter = 40000, thin = 20, pc_initialise = 2, 
-         b = 2, 
-        tau_c = 0.1, alpha = 2, beta = 1,
-        alpha_chi = 1000, beta_chi = 1)
+m <- mfa(y_scaled, iter = 1e5, thin = 50, pc_initialise = 2, 
+         b = 2, tau_c = 2, tau_eta = 1,
+        alpha = 1e-2, beta = 1,
+        alpha_chi = 5e3, beta_chi = 1)
 
 print( m )
 ```
@@ -85,11 +87,17 @@ MCMC diagnostics:
 ```{r mcmc-diagnostics}
 plot_mfa_trace(m)
 plot_mfa_autocorr(m)
+
 ```
 
 ```{r mfa-summary}
 mfa_summary <- summary(m)
 print(mfa_summary)
+
+```
+
+```{r delete-me}
+save(m, mfa_summary, file = "~/Desktop/deleteme.Rdata")
 ```
 
 add this to SCESet:
@@ -97,21 +105,97 @@ add this to SCESet:
 ```{r add-to-sceset}
 for(col in names(mfa_summary)) pData(sce_subset)[[col]] <- NULL
 pData(sce_subset) <- cbind(pData(sce_subset), mfa_summary)
+
 ```
 
 and plots:
 
-```{r plots, fig.width = 5, fig.height = 10}
-cowplot::plot_grid(plotPCA(sce_subset, colour_by = "branch"),
-           plotPCA(sce_subset, colour_by = "pseudotime"), nrow = 2)
+```{r plots, fig.width = 5, fig.height = 5}
+# cowplot::plot_grid(plotPCA(sce_subset, colour_by = "branch"),
+#           plotPCA(sce_subset, colour_by = "pseudotime"), nrow = 2)
 
 plt1 <- plotPhenoData(sce_subset, aes_string(x = 'tSNE1', y = "tSNE2", color = "pseudotime"))
 plt2 <- plotPhenoData(sce_subset, aes_string(x = 'tSNE1', y = "tSNE2", 
                             color = "branch"))
 
-cowplot::plot_grid(plt1, plt2, nrow = 2)
+
+print(plt1)
+print(plt2)
+
 ```
 
+Proper expression plotting:
+
+```{r proper-plot}
+gex_tidy <- scale(y) %>% as_data_frame() %>% 
+  dplyr::mutate(pseudotime = mfa_summary$pseudotime, branch = factor(mfa_summary$branch)) %>% 
+  gather(gene, expression, -pseudotime, -branch)
+
+cmap <- apply(m$traces$c_trace, 3, colMeans)
+kmap <- apply(m$traces$k_trace, 3, colMeans)
+
+pbranch1 <- colMeans(m$traces$gamma_trace - 1)
+
+pex <- lapply(1:2, function(b) {
+  b_expression <- sapply(1:m$G, function(g) {
+    cmap[g,b] + kmap[g,b] * mfa_summary$pseudotime
+  }) 
+  colnames(b_expression) <- m$feature_names
+  
+  b_expression <- as_data_frame(b_expression) %>% 
+    mutate(pseudotime = mfa_summary$pseudotime,
+           branch = factor(b),
+           pbranch1)
+  gather(b_expression, gene, predicted_expression, -pseudotime, -branch, -pbranch1)
+})
+
+pex <- bind_rows(pex)
+
+df <- inner_join(gex_tidy, pex, by = c("pseudotime", "branch", "gene"))
+df <- arrange(df, pseudotime)
+
+ggplot(df, aes(x = pseudotime, y = expression, color = branch)) +
+  geom_point(alpha = 0.3) + facet_wrap(~ gene, scales = "free_y") + scale_color_brewer(palette = "Set1") +
+  geom_line(aes(y = predicted_expression)) +
+  scale_x_reverse()
+```
+
+
+Pi:
+
+```{r calculate-pi}
+wmap <- tabulate(round(colMeans(m$traces$gamma_trace)))
+taumap <- colMeans(m$traces$tau_trace)
+pi <- calculate_pi(y, cmap, kmap, mfa_summary$pseudotime, 
+                   taumap, mean(m$traces$eta_trace),
+                   1e-1, F, log(wmap / sum(wmap)), F, F)
+
+sce_subset$pi <- pi[,1]
+plotPCA(sce_subset, colour_by = "pi")
+```
+
+
+
+Figure for supplementary:
+
+```{r fig-for-supp}
+filter(df, gene %in% c("CD34", "CD11b")) %>% 
+  ggplot(aes(x = pseudotime, y = expression)) +
+    geom_point(aes(fill = 1 - pbranch1), alpha = 0.2, shape = 21) + 
+    facet_wrap(~ gene, scales = "free_y") + 
+    scale_fill_viridis(name = "p(branch 1)") +
+  # scale_color_brewer(palette = "Set1", name = "Branch") +
+    geom_line(aes(linetype = branch, y = predicted_expression), size = 1.5, alpha = 0.8) +
+    scale_x_reverse() +
+  xlab("Pseudotime") + ylab("Expression")
+```
+
+
+And save:
+
+```{r save-fig}
+ggsave("../figs/limits_of_chi.png", width=7, height=3)
+```
 
 ```{r plot-gex, fig.width = 12, fig.height = 10}
 gex_tidy <- y %>% as_data_frame() %>% 
@@ -120,12 +204,14 @@ gex_tidy <- y %>% as_data_frame() %>%
 
 ggplot(gex_tidy, aes(x = pseudotime, y = expression, color = branch)) +
   geom_point(alpha = 0.3) + stat_smooth(se = FALSE, method = "lm") + facet_wrap(~ gene, scales = "free_y") + scale_color_brewer(palette = "Set1")
+
 ```
 
 ```{r plot-gex-errorbars}
 ggplot(mfa_summary, aes(x = pseudotime, y = pseudotime, color = factor(branch), 
                         ymin = pseudotime_lower, ymax = pseudotime_upper)) + 
   geom_point() + geom_errorbar()
+
 ```
 
 
@@ -135,6 +221,7 @@ ggplot(gex_tidy, aes(x = pseudotime, y = gene,
                     fill = expression)) + 
   geom_jitter(shape = 21, color = 'black') +
   facet_wrap(~ branch) + theme_classic() + viridis::scale_fill_viridis() 
+
 ```
 
 
@@ -151,11 +238,10 @@ pst_plot <- ggplot(pd_df, aes(x = tSNE1, y = tSNE2, color = pseudotime)) +
 branch_plot <- ggplot(pd_df, aes(x = tSNE1, y = tSNE2, color = branch)) +
   geom_point(alpha = 0.7) + 
   scale_color_brewer(palette = "Set1", name = expression(paste("MAP ", gamma)))
-
 ```
 
 ```{r plots-for-figure2}
-chimap <- colMeans(m$traces$chi_trace)
+chimap <- matrixStats::colMedians(m$traces$chi_trace)
 chi_df <- data_frame(gene = featureNames(sce_subset), chi_inv = 1 / chimap)
 # top <- dplyr::arrange(chi_df, desc(chi_inv)) %>% extract2("gene") %>% head(n = 20)
 # bottom <- dplyr::arrange(chi_df, chi_inv) %>% extract2("gene") %>% head(n = 20)
@@ -195,16 +281,14 @@ plot_gene <- function(g) {
 expression_plots <- lapply(genes, plot_gene)
 
 ex_plot <- plot_grid(plotlist = expression_plots, ncol = 1)
+
 ```
 
 Combine into upper grid:
 
 ```{r upper-grid}
 upper_grid <- plot_grid(
-  plot_grid(pst_plot, branch_plot, ncol = 1, labels = c("A", "B")),
-  chi_plot,
-  ex_plot,
-  ncol = 3, labels = c("", "C", "D"), rel_widths = c(3,2.4,2.4)
+  pst_plot, branch_plot, nrow = 1, labels = c("A", "B")
 )
 ```
 
@@ -217,6 +301,7 @@ upper_grid <- plot_grid(
 sce_subset <- plotPCA(sce_subset, return_SCESet = TRUE, colour_by = "Trajectory")
 root_cell <- which.min(redDim(sce_subset)[,2])
 pc2 <- redDim(sce_subset)[,2]
+
 ```
 
 
@@ -243,7 +328,7 @@ plot_cell_trajectory(cds, color_by = "Pseudotime")
 # gene_collapse_sd <- 1e-6 * gene_sds
 # new_exprs <- apply(exprs(s), 2, function(x) rnorm(length(x), x, gene_collapse_sd))
 
-to_sample_for_dpt <- sample(1:ncol(sce_subset), 4000, replace = FALSE)
+to_sample_for_dpt <- sample(1:ncol(sce_subset), 2000, replace = FALSE)
 dpt_pseudotime <- dpt_branch <- rep(NA, ncol(sce_subset))
 dpt_root_cell <- which.min(sce_subset$Trajectory[to_sample_for_dpt])
 
@@ -273,12 +358,14 @@ pst_compare_plot <- ggplot(df_tidy, aes(x = mfa, y = value)) +
   facet_wrap(~ algorithm, scales = "free_y", nrow = 1) +
   geom_point(alpha = 0.6) +
   xlab("MFA pseudotime") + ylab("Algorithm pseudotime")
+
 ```
 
 Print correlations:
 
 ```{r print-cor}
 cor(df_compare, use = 'complete')
+
 ```
 
 
@@ -296,7 +383,7 @@ freq_stat <- plyr::mapvalues(cds$State,
                              to = rep("Other", length(which(infrequent_states))))
 
 branch_df <- data_frame(Wishbone = factor(sce_subset$Branch),
-                        Monocle = factor(monocle_branch), #cds$State,
+                        Monocle = factor(freq_stat), #cds$State,
                         DPT = factor(dpt_branch),
                         tSNE1 = sce_subset$tSNE1,
                         tSNE2 = sce_subset$tSNE2)
@@ -320,7 +407,6 @@ bif_plots <- lapply(algorithms, plot_bif)
 
 bottom_grid <- cowplot::plot_grid(plotlist = bif_plots, nrow = 1,
                    rel_widths = c(3,3,3.7))
-
 ```
 
 Put it together for overall plot:
@@ -331,12 +417,30 @@ full_plot <- plot_grid(
   upper_grid,
   pst_compare_plot,
   bottom_grid,
-  rel_heights = c(2.7,1,1), labels = c("", "E", "F"),
+  rel_heights = c(1.5,1,0.8), labels = c("", "C", "D"),
   ncol = 1
 )
 
-ggsave("../figs/masscyto_fig.png", full_plot, width = 10, height = 12)
-
+ggsave("../figs/masscyto_fig.png", full_plot, width = 10, height = 11)
 ```
 
+Some diagnostics:
 
+```{r diagnostics}
+k0 <- colMeans(m$traces$k_trace[,,1])
+k1 <- colMeans(m$traces$k_trace[,,2])
+theta <- colMeans(m$traces$theta_trace)
+chi <- colMeans(m$traces$chi_trace)
+
+d <- data_frame(k0, k1, theta, chi, gene = m$feature_names) %>% 
+  gather(variable, value, -gene) 
+
+cowplot::plot_grid(
+  filter(d, variable != "chi") %>% 
+    ggplot(aes(x = gene, y = value, color = variable)) + geom_point() +
+    theme(legend.position = 'bottom'),
+  filter(d, variable == "chi") %>% 
+    ggplot(aes(x = gene, y = value)) + geom_point(),
+  ncol = 1)
+
+```
