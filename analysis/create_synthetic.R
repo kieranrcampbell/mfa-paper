@@ -3,8 +3,8 @@ library(viridis)
 
 # set.seed(123L)
 
-#' Sigmoid function for activations
-sigmoid <- function(t, phi, k, delta) {
+#' Sigmoid function for activations - renamed to avoid naming conflict
+cs_sigmoid <- function(t, phi, k, delta) {
   return( 2 * phi / (1 + exp(-k*(t - delta))))
 }
 
@@ -64,7 +64,7 @@ create_synthetic <- function(C = 100, G = 40, p_transient = 0,
     k_i <- k[, branch[i] + 1]
     phi_i <- phi[, branch[i] + 1]
     delta_i <- delta[, branch[i] + 1]
-    mu <- sigmoid(pst[i], phi_i, k_i, delta_i)
+    mu <- cs_sigmoid(pst[i], phi_i, k_i, delta_i)
     rnorm(length(mu), mu, gsd)
   })
   

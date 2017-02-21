@@ -227,7 +227,7 @@ cds <- orderCells(cds, num_paths = 2)
 monocle_pseudotime[to_sample_for_monocle] <- cds$Pseudotime
 monocle_branch[to_sample_for_monocle] <- cds$State
 
-plot_cell_trajectory(cds, color_by = "Pseudotime")
+plot_cell_trajectory(cds, color_by = "Trajectory")
 ```
 
 ## DPT

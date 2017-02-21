@@ -1,0 +1,214 @@
+---
+title: "Mixture of sigmoids analysis"
+author: "Kieran Campbell"
+date: "February 2017"
+output: html_document
+---
+
+See https://arxiv.org/pdf/1412.5218v1.pdf
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = TRUE)
+
+library(tidyverse)
+library(viridis)
+
+source("mh-gibbs.R")
+source("../create_synthetic.R")
+
+set.seed(123L)
+```
+
+Generate some data:
+
+```{r generate-data}
+G <- 30; N = 60
+synth <- create_synthetic(N, G, zero_negative = FALSE)
+y <- t(synth$X) # check out this consistent naming
+colnames(y) <- paste0("feature", 1:ncol(y))
+```
+
+PCA visualisation:
+
+```{r visualise-pca}
+dfy <- as_data_frame(prcomp(y)$x[,1:2]) %>% 
+  mutate(t = synth[['pst']],
+         branch = synth[['branch']]) 
+
+ggplot(dfy, aes(x = PC1, y = PC2, color = t)) +
+  geom_point() + scale_color_viridis()
+
+ggplot(dfy, aes(x = PC1, y = PC2, color = branch)) +
+  geom_point() + scale_color_viridis()
+```
+
+Now let's do some MCMC:
+
+```{r mcmc}
+pc1 <- prcomp(y)$x[,1]
+pst_init <- (pc1 - min(pc1) + 0.01) / (max(pc1) - min(pc1) + 0.02)
+
+d_fixed <- rep(0.5, G) # Fix all the deltas to 0.5
+
+# fixed <- list(delta0 = d_fixed, delta1 = d_fixed)
+fixed <- list()
+
+proposals = list(kappa_t = 0.1, kappa_k = 0.8, kappa_delta = 0.1); set.seed(123)
+g <- mh_gibbs(y, iter = 12000, thin = 3, proposals = proposals, 
+              fixed = fixed, ptype = "individual", pst_init = pst_init)
+```
+
+```{r trace-results}
+s <- to_ggmcmc(g)
+ggs_traceplot(s, "lp__") + stat_smooth()
+ggs_running(s, "lp__")
+ggs_autocorrelation(s, "lp__")
+
+sapply(g$accept, mean)
+```
+
+```{r save-results}
+save(g, synth, file = 'res.Rdata')
+```
+
+
+```{r and-view-results, fig.width=4, fig.height=3}
+tmean <- colMeans(g$traces$pst_trace)
+plot(synth$pst, tmean)
+```
+
+```{r copmare-branch}
+gamma <- colMeans(g$traces$gamma_trace)
+
+d <- data.frame(prcomp(y)$x[,1:2], gamma = gamma)
+
+ggplot(d, aes(x = PC1, y = PC2, color = gamma)) + 
+  geom_point() + scale_color_viridis(name = expression(gamma))
+```
+
+Compare the Ks:
+
+```{r compare-ks}
+k0 <- colMeans(g$traces$k0_trace)
+k1 <- colMeans(g$traces$k1_trace)
+qplot(synth$k[,2], k0) 
+qplot(synth$k[,1], k1)
+
+phi0 <- colMeans(g$traces$phi0_trace)
+phi1 <- colMeans(g$traces$phi1_trace)
+
+qplot(synth$phi[,2], phi0)
+qplot(synth$phi[,1], phi1)
+
+delta0 <- colMeans(g$traces$delta0_trace)
+delta1 <- colMeans(g$traces$delta1_trace)
+
+qplot(synth$delta[,2], delta0)
+qplot(synth$delta[,1], delta1)
+```
+
+Posterior mean calculations of pi:
+
+```{r posterior-pi}
+tau <- colMeans(g$traces$tau_trace)
+pst <- tmean
+
+pi <- sapply(seq_len(N), function(i) {
+  y_i <- y[i,]
+  comp0 <- sum(dnorm(y_i, mean = mu_cg(k0, phi0, delta0, pst[i]), 1 / sqrt(tau), log = TRUE))
+  comp1 <- sum(dnorm(y_i, mean = mu_cg(k1, phi1, delta1, pst[i]), 1 / sqrt(tau), log = TRUE))
+  #pi_i <- comp0 - logSumExp(c(comp0, comp1))
+  #return(exp(pi_i))
+  return(c(comp0, comp1))
+})
+
+dy <- as_data_frame(prcomp(y)$x[,1:2]) %>% 
+  mutate(comp0 = pi[1,], comp1 = pi[2,],
+         pst = synth[['pst']], branch = factor(synth[['branch']]))
+
+ggplot(dy, aes(x = comp0, y = comp1, color = pst, shape = branch)) +
+  geom_point() + scale_color_viridis()
+
+# ggplot(dy, aes(x = PC1, y = PC2, color = comp0, shape = branch)) +
+#   geom_point() + scale_color_viridis()
+
+```
+
+
+Let's have a look at the fits for a couple of the genes:
+
+```{r couple-o-fits}
+gex_tidy <- y %>% as_data_frame() %>% 
+  dplyr::mutate(pseudotime = tmean, 
+                branch = factor(round(colMeans(g$traces$gamma_trace)))) %>% 
+  gather(gene, expression, -pseudotime, -branch)
+
+pbranch1 <- colMeans(g$traces$gamma_trace)
+k <- cbind(k0_mean, k1_mean)
+phi <- cbind(phi0_mean, phi1_mean)
+delta <- matrix(0.5, nrow = G, ncol = 2)
+
+pex <- lapply(1:2, function(b) {
+  b_expression <- sapply(1:G, function(g) {
+    mu_cg(k[g,b], phi[g,b], delta[g,b], tmean)
+  }) 
+  colnames(b_expression) <- colnames(y)
+  
+  b_expression <- as_data_frame(b_expression) %>% 
+    mutate(pseudotime = tmean,
+           branch = b,
+           pbranch1)
+  gather(b_expression, gene, predicted_expression, -pseudotime, -branch, -pbranch1)
+})
+
+pex <- bind_rows(pex)
+gex_tidy$branch <- as.integer(gex_tidy$branch)
+
+df <- inner_join(gex_tidy, pex, by = c("pseudotime", "branch", "gene"))
+df <- arrange(df, pseudotime)
+
+filter(df, gene %in% paste0("feature", 1:10)) %>% 
+  ggplot(aes(x = pseudotime, y = expression, color = factor(branch))) +
+    geom_point(alpha = 0.3) + facet_wrap(~ gene, scales = "free_y") + 
+    scale_color_brewer(palette = "Set1") +
+    geom_line(aes(y = predicted_expression))
+```
+
+```{r synthetic}
+gex_tidy <- y %>% as_data_frame() %>% 
+  dplyr::mutate(pseudotime = synth[['pst']], 
+                branch = synth[['branch']]) %>% 
+  gather(gene, expression, -pseudotime, -branch)
+
+# pbranch1 <- colMeans(g$traces$gamma_trace)
+# k <- cbind(k0_mean, k1_mean)
+# phi <- cbind(k0_mean, k1_mean)
+# delta <- matrix(0.5, nrow = G, ncol = 2)
+
+pex <- lapply(1:2, function(b) {
+  b_expression <- sapply(1:G, function(g) {
+    mu_cg(synth$k[g,b], synth$phi[g,b], synth$delta[g,b], synth$pst)
+  }) 
+  colnames(b_expression) <- colnames(y)
+  
+  b_expression <- as_data_frame(b_expression) %>% 
+    mutate(pseudotime = synth[['pst']],
+           branch = synth[['branch']])
+           # pbranch1)
+  gather(b_expression, gene, predicted_expression, -pseudotime, -branch)
+})
+
+pex <- bind_rows(pex)
+gex_tidy$branch <- as.integer(gex_tidy$branch)
+
+df <- inner_join(gex_tidy, pex, by = c("pseudotime", "branch", "gene"))
+df <- arrange(df, pseudotime)
+
+filter(df, gene %in% paste0("feature", 1:10)) %>% 
+  ggplot(aes(x = pseudotime, y = expression, color = factor(branch))) +
+    geom_point(alpha = 0.3) + facet_wrap(~ gene, scales = "free_y") + 
+    scale_color_brewer(palette = "Set1") +
+    geom_line(aes(y = predicted_expression)) +
+    scale_x_reverse()
+```
+
