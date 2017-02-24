@@ -16,7 +16,7 @@ C = Cs, G = Gs, p_transient = p_transients, rep = reps)
 
 rule all:
     input:
-        output_files
+        output_files, "simulation_res.tar.gz"
 
 
 rule fit_transient_pseudotimes:
@@ -24,3 +24,11 @@ rule fit_transient_pseudotimes:
         "data/pseudotime_results_{C}_{G}_{p_transient}_{rep}.csv"
     shell:
         "Rscript {R_opts} fit_pseudotimes.R {wildcards.C} {wildcards.G} {wildcards.p_transient} {wildcards.rep}"
+
+rule gzip_results:
+    input:
+        output_files
+    output:
+        "simulation_res.tar.gz"
+    shell:
+        "tar cvfz {output} data"

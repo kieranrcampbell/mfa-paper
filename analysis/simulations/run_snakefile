@@ -1,0 +1,3 @@
+snakemake --jobs 240 --cluster "qsub -N mfa_sims -P webber.prjc -q short.qc -o logs -e logs -cwd -V"
+# -pe shmem 1"
+

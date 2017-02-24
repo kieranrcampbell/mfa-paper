@@ -10,13 +10,13 @@ library(monocle)
 library(devtools)
 library(tidyverse)
 
-load_all("~/oxford/mfa/mfa")
+load_all("oxford/mfa/mfa")
 source("../create_synthetic.R")
 
 fit_dpt_pseudotime <- function(X, pst) {
   root_cell <- which.min(pst)
   ts <- Transitions(t(X))
-  
+
   pt <- tryCatch(dpt(ts, branching = TRUE, root = root_cell)$DPT,
                  error = function(e) {
                     message("DPT failed")
@@ -43,7 +43,7 @@ fit_mfa_pseudotime <- function(X, pst) {
   pc12 <- prcomp(t(X))$x[,1:2]
   pc_cors <- apply(pc12, 2, cor, pst)
   pc_initialise <- which.max(abs(pc_cors))
-  
+
   m <- mfa(t(X), iter = 6000, b = 2, pc_initialise = pc_initialise,
            alpha = 0.1, beta = 0.1)
   ms <- summary(m)
@@ -75,8 +75,7 @@ output_df <- data_frame(
   true_pst = pst
 )
 
-output_df <- mutate(output_df, 
+output_df <- mutate(output_df,
                     C = C, G = G, p_transient = p_transient, rep = rep)
 
 write_csv(output_df, output_file)
-
