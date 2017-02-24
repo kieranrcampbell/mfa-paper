@@ -10,7 +10,7 @@ library(monocle)
 library(devtools)
 library(tidyverse)
 
-load_all("oxford/mfa/mfa")
+load_all("~/mfa/mfa")
 source("../create_synthetic.R")
 
 fit_dpt_pseudotime <- function(X, pst) {
