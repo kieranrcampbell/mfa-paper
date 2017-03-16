@@ -25,6 +25,7 @@ library(monocle)
 library(dpt)
 library(GGally)
 
+
 devtools::load_all("~/oxford/mfa/mfa")
 
 source("create_synthetic.R")
@@ -200,7 +201,7 @@ Pinched from transient:
 data_dir <- "simulations/data"
 csv_files <- dir(data_dir, full.names = TRUE)
 
-dfs <- lapply(csv_files, read_csv)
+dfs <- lapply(csv_files, read_csv, col_type = cols())
 df_full <- bind_rows(dfs)
 
 df_reduced <- group_by(df_full, p_transient, rep) %>% 

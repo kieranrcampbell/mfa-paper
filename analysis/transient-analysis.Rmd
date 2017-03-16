@@ -20,11 +20,8 @@ library(viridis)
 library(magrittr)
 library(cowplot)
 
-library(monocle)
-library(dpt)
-library(GGally)
 
-devtools::load_all("~/oxford/mfa/mfa")
+library(GGally)
 
 source("create_synthetic.R")
 ```
@@ -76,7 +73,7 @@ ggplot(x_t, aes(x = pst, y = expression, color = pst)) +
 data_dir <- "simulations/data"
 csv_files <- dir(data_dir, full.names = TRUE)
 
-dfs <- lapply(csv_files, read_csv)
+dfs <- lapply(csv_files, read_csv, col_type = cols())
 df_full <- bind_rows(dfs)
 
 df_reduced <- group_by(df_full, p_transient, rep) %>% 

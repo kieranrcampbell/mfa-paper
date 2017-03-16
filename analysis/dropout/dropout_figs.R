@@ -3,7 +3,7 @@ library(tidyverse)
 library(cowplot)
 
 files <- dir("data", full.names = TRUE)
-dfs <- lapply(files, read_csv)
+dfs <- lapply(files, read_csv, col_type = cols())
 
 df <- bind_rows(dfs)
 

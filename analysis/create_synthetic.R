@@ -116,6 +116,7 @@ create_synthetic <- function(C = 100, G = 40, p_transient = 0,
       X[g,drop] <- 0
     }
   }
+
   
   list(X = X, branch = branch, pst = pst, k = k, phi = phi,
        delta = delta, p_transient = p_transient)
